@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caliope.local/schemas/portfolio-observation.schema.json",
+  "title": "CALIOPE portfolio observation payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sample_id", "observed_at", "source", "account", "positions",
+    "indicator_snapshots", "portfolio_validation", "human_decision", "final_result"
+  ],
+  "properties": {
+    "sample_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{3,100}$"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "source": {"type": "string", "minLength": 1, "maxLength": 300},
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["broker", "mode", "base_currency", "equity"],
+      "properties": {
+        "broker": {"type": "string", "minLength": 1, "maxLength": 80},
+        "mode": {"enum": ["demo", "paper", "live", "unknown"]},
+        "base_currency": {"type": "string", "minLength": 1, "maxLength": 12},
+        "equity": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "positions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {"$ref": "#/$defs/position"}
+    },
+    "indicator_snapshots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "indicator-batch.schema.json#/$defs/indicator_snapshot"}
+    },
+    "portfolio_validation": {"$ref": "#/$defs/portfolio_validation"},
+    "human_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_scope", "action", "rationale", "decided_by", "decided_at", "executed"],
+      "properties": {
+        "decision_scope": {"enum": ["new_entry_signal", "manage_existing"]},
+        "action": {"type": "string", "minLength": 1, "maxLength": 80},
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "decided_by": {"type": "string", "minLength": 1, "maxLength": 120},
+        "decided_at": {"type": "string", "format": "date-time"},
+        "executed": {"type": "boolean"}
+      }
+    },
+    "final_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "closed_at", "net_pnl", "currency", "notes"],
+      "properties": {
+        "status": {"enum": ["open", "closed", "cancelled", "unknown"]},
+        "closed_at": {"type": ["string", "null"], "format": "date-time"},
+        "net_pnl": {"type": ["number", "null"]},
+        "currency": {"type": "string", "minLength": 1, "maxLength": 12},
+        "notes": {"type": "string", "maxLength": 1000}
+      }
+    }
+  },
+  "$defs": {
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["take_profit", "stop_loss", "recorded_at"],
+      "properties": {
+        "take_profit": {"type": ["number", "null"]},
+        "stop_loss": {"type": ["number", "null"]},
+        "recorded_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position_id", "asset", "asset_class", "side", "quantity", "entry_price",
+        "original_plan", "updated_plan", "execution_metrics"
+      ],
+      "properties": {
+        "position_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{3,100}$"},
+        "asset": {"type": "string", "minLength": 1, "maxLength": 80},
+        "asset_class": {"type": "string", "minLength": 1, "maxLength": 80},
+        "side": {"enum": ["long", "short"]},
+        "quantity": {"type": "number", "exclusiveMinimum": 0},
+        "entry_price": {"type": "number"},
+        "original_plan": {"$ref": "#/$defs/plan"},
+        "updated_plan": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/updated_plan"}]},
+        "execution_metrics": {"$ref": "#/$defs/execution_metrics"}
+      }
+    },
+    "updated_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["take_profit", "stop_loss", "recorded_at", "reason"],
+      "properties": {
+        "take_profit": {"type": ["number", "null"]},
+        "stop_loss": {"type": ["number", "null"]},
+        "recorded_at": {"type": "string", "format": "date-time"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500}
+      }
+    },
+    "execution_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unrealized_pnl", "realized_pnl", "mfe", "mae", "excursion_unit",
+        "slippage", "slippage_unit", "gap_sensitivity"
+      ],
+      "properties": {
+        "unrealized_pnl": {"type": ["number", "null"]},
+        "realized_pnl": {"type": ["number", "null"]},
+        "mfe": {"type": ["number", "null"], "minimum": 0},
+        "mae": {"type": ["number", "null"], "minimum": 0},
+        "excursion_unit": {"enum": ["currency", "R", "percent", "price"]},
+        "slippage": {"type": ["number", "null"]},
+        "slippage_unit": {"type": "string", "minLength": 1, "maxLength": 40},
+        "gap_sensitivity": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["gap", "gap_unit", "estimated_pnl_impact", "currency"],
+            "properties": {
+              "gap": {"type": "number"},
+              "gap_unit": {"type": "string", "minLength": 1, "maxLength": 40},
+              "estimated_pnl_impact": {"type": "number"},
+              "currency": {"type": "string", "minLength": 1, "maxLength": 12}
+            }
+          }
+        }
+      }
+    },
+    "portfolio_validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "performed", "method", "correlation_groups", "concentration",
+        "aggregate_risk", "assessment"
+      ],
+      "properties": {
+        "performed": {"type": "boolean"},
+        "method": {"type": "string", "minLength": 1, "maxLength": 200},
+        "correlation_groups": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["position_ids", "relationship", "coefficient", "lookback", "source"],
+            "properties": {
+              "position_ids": {
+                "type": "array", "minItems": 2, "maxItems": 30, "uniqueItems": true,
+                "items": {"type": "string"}
+              },
+              "relationship": {"type": "string", "minLength": 1, "maxLength": 300},
+              "coefficient": {"type": ["number", "null"], "minimum": -1, "maximum": 1},
+              "lookback": {"type": "string", "minLength": 1, "maxLength": 100},
+              "source": {"type": "string", "minLength": 1, "maxLength": 200}
+            }
+          }
+        },
+        "concentration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["basis", "largest_position_share", "shares"],
+          "properties": {
+            "basis": {"type": "string", "minLength": 1, "maxLength": 80},
+            "largest_position_share": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "shares": {
+              "type": "object",
+              "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+          }
+        },
+        "aggregate_risk": {"type": ["number", "null"], "minimum": 0},
+        "assessment": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    }
+  }
+}

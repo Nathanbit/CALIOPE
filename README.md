@@ -39,6 +39,15 @@ Nemotron revisan ámbitos distintos; Claude/Themis organiza la evidencia sin
 votar ni saltarse compuertas. Los contratos JSON están en `contracts/` y el
 diseño completo en `docs/RECURSIVE_MACROFLOW_LOOP.md`.
 
+`recursive_evidence.py` añade el registro empírico por operación y cartera. El
+ledger enlaza cada evento mediante SHA-256 y separa cinco estados:
+observación, hipótesis, candidato, validación y promoción humana. Los casos
+abiertos se conservan, pero no entrenan el ciclo. Para avanzar se exigen PnL,
+MFE, MAE, slippage, sensibilidad a gaps, validación de concentración y varias
+muestras selladas OOS/holdout. Una validación fallida no puede omitirse de una
+promoción. El contrato y el procedimiento están documentados en
+`docs/PORTFOLIO_RECURSIVE_EVIDENCE.md`.
+
 ## Runner local
 
 `caliope_loop.py` implementa la parte determinista del ciclo. Conserva snapshots

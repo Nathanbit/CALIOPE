@@ -1,0 +1,150 @@
+{
+  "schema_version": "1.0",
+  "batch_id": "simplefx-indices-20261019",
+  "captured_from": "TradingView charts reviewed alongside sanitized SimpleFX positions",
+  "timezone_status": "known",
+  "snapshots": [
+    {
+      "asset": "NQ1!",
+      "feed": "NQ1!",
+      "timeframe": "5m",
+      "observed_at": "2026-10-19T17:36:37+02:00",
+      "source": "TradingView chart",
+      "model": "MacroFlow v0.9.4",
+      "values": {
+        "transmission_score": 13,
+        "transmission_state": "neutral",
+        "micro_score": 63,
+        "mtf_score": -7,
+        "structure": "ruptura_long",
+        "consensus_direction": "long",
+        "consensus_count": 2,
+        "consensus_total": 3,
+        "controls": "OK",
+        "grade": "N/D",
+        "pattern_present": false,
+        "relative_volume": 0.78,
+        "cost_metric": 0.19,
+        "atr": 46.25,
+        "z_spy": 0.27,
+        "z_vix": -0.31,
+        "z_dxy": -0.27,
+        "pearson_r": 0.67,
+        "pearson_t": 3.82,
+        "pearson_n": 20,
+        "pearson_consistency": "3/3+"
+      },
+      "decision_context": {
+        "new_entry_signal": "none",
+        "manage_existing": "not_evaluated",
+        "reported_action": "SIN OPERACIÓN"
+      }
+    },
+    {
+      "asset": "ES1!",
+      "feed": "ES1!",
+      "timeframe": "5m",
+      "observed_at": "2026-10-19T17:37:34+02:00",
+      "source": "TradingView chart",
+      "model": "MacroFlow v0.9.4",
+      "values": {
+        "transmission_score": 13,
+        "transmission_state": "neutral",
+        "micro_score": 59,
+        "mtf_score": -47,
+        "structure": "ruptura_long",
+        "consensus_direction": "long",
+        "consensus_count": 2,
+        "consensus_total": 3,
+        "controls": "OK",
+        "grade": "N/D",
+        "pattern_present": false,
+        "relative_volume": 0.99,
+        "cost_metric": 0.33,
+        "atr": 7.0,
+        "pearson_r": 0.74,
+        "pearson_t": 4.66,
+        "pearson_n": 20,
+        "pearson_consistency": "3/3+"
+      },
+      "decision_context": {
+        "new_entry_signal": "none",
+        "manage_existing": "not_evaluated",
+        "reported_action": "SIN OPERACIÓN"
+      }
+    },
+    {
+      "asset": "RTY1!",
+      "feed": "RTY1!",
+      "timeframe": "5m",
+      "observed_at": "2026-10-19T17:38:32+02:00",
+      "source": "TradingView chart",
+      "model": "MacroFlow v0.9.4",
+      "values": {
+        "transmission_score": 13,
+        "transmission_state": "neutral",
+        "micro_score": 30,
+        "mtf_score": -73,
+        "structure": "range",
+        "consensus_direction": "long",
+        "consensus_count": 2,
+        "consensus_total": 3,
+        "controls": "OK",
+        "grade": "N/D",
+        "pattern_present": false,
+        "relative_volume": 0.69,
+        "cost_metric": 0.22,
+        "atr": 3.4,
+        "pearson_r": 0.5,
+        "pearson_t": 2.48,
+        "pearson_n": 20,
+        "pearson_consistency": "3/3+"
+      },
+      "decision_context": {
+        "new_entry_signal": "none",
+        "manage_existing": "not_evaluated",
+        "reported_action": "SIN OPERACIÓN"
+      }
+    }
+  ],
+  "portfolio_context": {
+    "outcome": "open_unresolved",
+    "promotion_eligible": false,
+    "new_entry_action": "SIN OPERACIÓN",
+    "manage_existing_action": "VALIDAR TP/SL DE LAS POSICIONES ABIERTAS COMO UNA SOLA CESTA",
+    "risk_summary": {
+      "stop_distance_atr": {
+        "minimum": 0.8,
+        "maximum": 2.5
+      },
+      "original_take_profit_distance_atr": {
+        "minimum": 7.7,
+        "maximum": 15.6
+      },
+      "interpretation": "Los stops observados están dentro del rango indicado; los objetivos originales son objetivos runner y no validan por sí solos una entrada nueva."
+    },
+    "basket_metrics": {
+      "open_pnl_approx": 4.73,
+      "protected_profit_gross": 2.04,
+      "all_targets_gross": 31.13,
+      "currency": "USDT (estimación reportada)",
+      "largest_position_share": 0.83,
+      "largest_position_label": "US500",
+      "correlation_assessment": "Las tres posiciones representan una cesta concentrada en el factor direccional de índices estadounidenses.",
+      "gap_sensitivity": [
+        {
+          "asset": "US500",
+          "adverse_slippage": 10.2,
+          "unit": "points",
+          "effect": "Un gap o deslizamiento adverso adicional de esta magnitud podría consumir el beneficio bruto protegido estimado de la cesta."
+        }
+      ],
+      "provenance": "Estimaciones derivadas de las capturas actuales; requieren reconciliación posterior con el historial del broker."
+    },
+    "notes": [
+      "Caso sanitizado: no contiene identificador de cuenta ni datos personales.",
+      "Las capturas de SimpleFX mostraban hora de plataforma sin zona rotulada; no se convirtió esa hora a UTC.",
+      "SIN OPERACIÓN describe señales de entrada nuevas; la gestión de posiciones existentes requiere una decisión separada."
+    ]
+  }
+}

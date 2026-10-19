@@ -29,6 +29,15 @@ segunda iteración ni materializó una candidata.
 El resultado no demuestra rentabilidad. La ventana observada contiene cero
 trades y no permite estimar rendimiento, Sharpe, drawdown o estabilidad.
 
+## Evidencia operativa posterior
+
+`evidence/LIVE_INDICATOR_SNAPSHOTS_2026-10-19.json` conserva una lectura
+sanitizada de NQ1!, ES1! y RTY1! en 5 minutos. El caso separa explícitamente
+`SIN OPERACIÓN` para entradas nuevas de la gestión de posiciones existentes,
+registra la concentración de la cesta y permanece `open_unresolved` con
+`promotion_eligible=false`. Su resultado futuro debe reconciliarse con el
+historial del broker antes de incorporarse a una hipótesis.
+
 ## Flujo
 
 Los agentes producen revisiones separadas en `reviews/`. Las compuertas del

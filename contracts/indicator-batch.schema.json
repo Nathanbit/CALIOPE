@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caliope.local/schemas/indicator-batch.schema.json",
+  "title": "CALIOPE sanitized live indicator batch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "batch_id", "captured_from", "timezone_status",
+    "snapshots", "portfolio_context"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "batch_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{3,100}$"},
+    "captured_from": {"type": "string", "minLength": 1, "maxLength": 200},
+    "timezone_status": {"enum": ["known", "unknown"]},
+    "snapshots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/indicator_snapshot"}
+    },
+    "portfolio_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome", "promotion_eligible", "new_entry_action",
+        "manage_existing_action", "risk_summary", "notes"
+      ],
+      "properties": {
+        "outcome": {"enum": ["open_unresolved", "closed", "cancelled", "unknown"]},
+        "promotion_eligible": {"const": false},
+        "new_entry_action": {"type": "string", "minLength": 1, "maxLength": 120},
+        "manage_existing_action": {"type": "string", "minLength": 1, "maxLength": 200},
+        "risk_summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stop_distance_atr", "original_take_profit_distance_atr", "interpretation"
+          ],
+          "properties": {
+            "stop_distance_atr": {"$ref": "#/$defs/nonnegative_range"},
+            "original_take_profit_distance_atr": {"$ref": "#/$defs/nonnegative_range"},
+            "interpretation": {"type": "string", "minLength": 1, "maxLength": 1000}
+          }
+        },
+        "basket_metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "open_pnl_approx", "protected_profit_gross", "all_targets_gross",
+            "currency", "largest_position_share", "largest_position_label",
+            "correlation_assessment", "gap_sensitivity", "provenance"
+          ],
+          "properties": {
+            "open_pnl_approx": {"type": "number"},
+            "protected_profit_gross": {"type": "number"},
+            "all_targets_gross": {"type": "number"},
+            "currency": {"type": "string", "minLength": 1, "maxLength": 40},
+            "largest_position_share": {"type": "number", "minimum": 0, "maximum": 1},
+            "largest_position_label": {"type": "string", "minLength": 1, "maxLength": 80},
+            "correlation_assessment": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "gap_sensitivity": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["asset", "adverse_slippage", "unit", "effect"],
+                "properties": {
+                  "asset": {"type": "string", "minLength": 1, "maxLength": 80},
+                  "adverse_slippage": {"type": "number", "minimum": 0},
+                  "unit": {"type": "string", "minLength": 1, "maxLength": 40},
+                  "effect": {"type": "string", "minLength": 1, "maxLength": 500}
+                }
+              }
+            },
+            "provenance": {"type": "string", "minLength": 1, "maxLength": 300}
+          }
+        },
+        "notes": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonnegative_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": {"type": "number", "minimum": 0},
+        "maximum": {"type": "number", "minimum": 0}
+      }
+    },
+    "indicator_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset", "feed", "timeframe", "observed_at", "source", "model",
+        "values", "decision_context"
+      ],
+      "properties": {
+        "asset": {"type": "string", "minLength": 1, "maxLength": 80},
+        "feed": {"type": "string", "minLength": 1, "maxLength": 120},
+        "timeframe": {"type": "string", "minLength": 1, "maxLength": 40},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "source": {"type": "string", "minLength": 1, "maxLength": 200},
+        "model": {"type": "string", "minLength": 1, "maxLength": 120},
+        "values": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 100,
+          "additionalProperties": {"type": ["string", "number", "boolean", "null"]}
+        },
+        "decision_context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["new_entry_signal", "manage_existing", "reported_action"],
+          "properties": {
+            "new_entry_signal": {"enum": ["long", "short", "none", "not_evaluated"]},
+            "manage_existing": {
+              "enum": ["hold", "adjust", "reduce", "close", "observe_only", "not_evaluated"]
+            },
+            "reported_action": {"type": "string", "minLength": 1, "maxLength": 120}
+          }
+        }
+      }
+    }
+  }
+}
