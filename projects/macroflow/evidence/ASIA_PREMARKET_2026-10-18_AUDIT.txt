@@ -1,0 +1,74 @@
+MACROFLOW — AUDITORÍA PREMARKET ASIA
+Fecha de corte: domingo 18 de octubre de 2026, tarde de Guayaquil (UTC-5)
+
+1. ESTADO VERIFICADO DEL MERCADO
+
+El cierre estadounidense del viernes dejó un traspaso claramente defensivo para la apertura asiática del lunes:
+
+- S&P 500: 7.659,44, -1,09% el viernes y -1,9% en la semana.
+- Nasdaq Composite: 26.140,03, -2,15% el viernes y -4,5% en la semana.
+- Russell 2000: 2.721,37, -1,66% el viernes y -3,0% en la semana.
+- Dow: 52.002,41, -0,34% el viernes, aunque +0,7% semanal.
+- VIX: 19,99, +21,45% el viernes.
+- WTI: 99,00 USD, +2,59% el viernes.
+
+La caída estuvo concentrada en tecnología y semiconductores: casi todo el sector tecnológico del S&P terminó en rojo. Por eso la señal es de risk-off, pero no de liquidación uniforme de todos los sectores.
+
+BTC no confirmó un desplome adicional durante todo el fin de semana. Las fuentes de precios consultadas muestran una zona aproximada de 81,1k–81,3k durante la tarde del domingo, un mínimo dominical cercano a 80,8k y un máximo cercano a 82,2k. La lectura correcta es presión bajista persistente con liquidez de fin de semana, no una capitulación nueva. La franja 80,7k–80,8k coincide con mínimos repetidos desde el viernes; 81,5k–81,7k es la primera zona de recuperación y 82,1k–82,3k la siguiente confirmación.
+
+2. QUÉ CAMBIA EN ASIA EL LUNES 19
+
+- Tokio y Seúl abren alrededor de las 19:00 del domingo en Guayaquil.
+- Shanghái abre alrededor de las 20:30 de Guayaquil.
+- A las 21:00 de Guayaquil (02:00 UTC / 10:00 Pekín) se publica el bloque chino de Q3 y septiembre: PIB, producción industrial, ventas minoristas, inversión fija y desempleo.
+- El consenso visible antes del dato apunta aproximadamente a PIB interanual 4,4% (previo 4,3%), producción industrial 5,4% (previo 5,2%), ventas minoristas 0,5% (previo 0,4%) e inversión fija -7,3% (previo -7,2%). Es un evento binario y los consensos varían ligeramente entre proveedores.
+- La bolsa de Hong Kong estará cerrada el lunes por el día posterior al Chung Yeung Festival. También se interrumpe Stock Connect; algunos derivados de divisas, tasas y MSCI sí pueden negociar bajo el régimen de Holiday Trading.
+
+Esto reduce la amplitud del price discovery regional. La primera reacción al cierre débil de Wall Street recaerá más en Nikkei/Kospi, futuros, China continental y cripto. Una ruptura de BTC durante esa ventana tendrá menos confirmación regional de la habitual porque no habrá Hang Seng/HSTECH en efectivo.
+
+3. IMPLICACIONES PARA MACROFLOW
+
+El indicador no debe tratar SPY, VIX o DXY como datos vivos durante el domingo ni usarlos para promover una WATCH. Son un prior del cierre del viernes. La degradación de contexto cerrado y el risk factor de 0,5 de la v0.9.x son correctos.
+
+Cambios recomendados para la siguiente revisión:
+
+1) Añadir un blackout macro manual de 15 minutos antes a 20–30 minutos después de un evento de alto impacto. Para este caso: 20:45–21:30 de Guayaquil. Durante el blackout no se promueven WATCH; solo se registra evidencia.
+
+2) Invalidar una WATCH pendiente al comenzar el blackout. Tras el dato debe nacer una señal nueva, para impedir que una evidencia previa al PIB se ejecute con un régimen de volatilidad distinto.
+
+3) Exigir dos cierres posteriores al evento antes de restaurar Grado B, junto con 3/3 MTF y alineación local EMA rápida/EMA lenta. Esto evita entrar en la primera mecha de la publicación.
+
+4) Bloquear promoción cuando el precio ya se alejó más de 0,35–0,50 ATR del precio que originó la WATCH. Las cuatro operaciones perdedoras observadas en v0.9.3 son compatibles con una promoción tardía; conservar evidencia antigua sin controlar el desplazamiento permite perseguir el movimiento.
+
+5) Añadir un veto de shock: si el True Range de la vela supera 1,5 veces el ATR corto, o si la mecha dominante es mayor que 60% del rango, no ejecutar en esa vela. Revalidar en la siguiente.
+
+6) Fuera del horario de Wall Street, Pearson de SPY/VIX debe ser informativo y no sumar puntuación. Si el feed supera la edad máxima, mostrar STALE y mantenerlo fuera del score. En Asia, el score debe depender de precio/volumen/MTF del propio activo.
+
+7) Mantener riesgo reducido a 0,35–0,50 durante fin de semana, feriados regionales o una sesión sin la plaza principal. Hong Kong cerrado justifica conservar ese límite el lunes hasta que termine la ventana de datos chinos.
+
+8) El dashboard debe distinguir: US CLOSED, HK HOLIDAY, CHINA EVENT y NORMAL ASIA. Pine no consume por sí solo un calendario económico fiable; conviene usar inputs de timestamp para el próximo evento, más una alerta previa.
+
+4. LECTURA OPERATIVA DEL CONTEXTO
+
+Sesgo base: risk-off moderado, dominado por tecnología y aumento de volatilidad. No hay evidencia suficiente para etiquetar el domingo como capitulación.
+
+Confirmación bajista para el modelo: cierre sostenido por debajo de 80,7k–80,8k con volumen y sin recuperación inmediata, preferiblemente después del dato chino.
+
+Invalidación del impulso bajista de fin de semana: recuperación de 81,5k–81,7k; una aceptación sobre 82,1k–82,3k convertiría el movimiento dominical en rechazo del soporte.
+
+Estas zonas sirven para validar o rechazar señales del indicador, no como órdenes automáticas por sí solas.
+
+FUENTES
+
+- AP, cierre de índices de EE. UU. del 16 de octubre: https://apnews.com/article/c27809783ae3230b44c26e5ee4bea056
+- AP, amplitud y caída tecnológica del viernes: https://apnews.com/article/d2655f64db7ec8ae450525d58f97b628
+- Market digest (VIX, WTI y cierres): https://stockmarketwatch.com/digest/2026-10-16
+- Reuters republicado por MarketScreener, cierre global del viernes: https://www.marketscreener.com/news/stocks-edge-lower-as-dollar-heads-for-weekly-loss-ce785cdadc8cff2d
+- Historial de precio BTC de OKX: https://www.okx.com/en-us/price-history/bitcoin-btc
+- Precio e histórico BTC de Investing.com: https://es.investing.com/crypto/bitcoin/historical-data
+- Calendario oficial del National Bureau of Statistics of China: https://www.stats.gov.cn/english/PressRelease/ReleaseCalendar/202512/t20251226_1962154.html
+- Agenda de China y previsiones: https://tradingeconomics.com/china/calendar
+- Caixin, agenda de la semana en China: https://www.caixinglobal.com/2026-10-16/the-week-ahead-oct-19-25-china-releases-quarterly-economic-data-apec-finance-ministers-meet-102494148.html
+- HKEX, calendario del 19 de octubre: https://www.hkex.com.hk/News/HKEX-Calendar?acttype=%7BF4C40F45-DA56-41A7-A740-F86B26DA5349%7D&currenttab=search-result&datefrom=2026-05-09&dateto=2026-11-05&defaultdate=2026-05-09&order=asc&sc_lang=en
+- Gobierno de Hong Kong, feriados 2026: https://www.info.gov.hk/gia/general/202505/16/P2025051300353.htm
+

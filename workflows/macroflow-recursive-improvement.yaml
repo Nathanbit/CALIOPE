@@ -1,0 +1,209 @@
+name: macroflow_recursive_improvement
+version: 1
+status: specification_only
+mode: research_advisory
+project: projects/macroflow
+
+# Themis/CALIOPE is the only component allowed to advance the DAG. Models may
+# propose a next task, but they cannot call themselves or promote a candidate.
+control:
+  orchestrator: claude_themis
+  max_iterations: 2
+  max_candidates_per_run: 2
+  max_wall_clock_minutes: 45
+  stop_on_repeated_evidence_hash: true
+  stop_on_no_metric_improvement: true
+  stop_on_budget_exhaustion: true
+  production_self_modification: false
+  live_execution: false
+
+budgets:
+  max_model_calls: 16
+  max_total_input_tokens: 60000
+  max_total_output_tokens: 12000
+  max_cost_usd: 2.00
+  max_prompt_chars_per_agent: 12000
+  max_findings_per_agent: 8
+  cache_by_input_hash: true
+  send_diffs_instead_of_full_source_after_iteration_0: true
+
+inputs:
+  immutable_baseline: source/MacroFlow_Backtest_v0_9_4_VALIDATION.pine
+  candidate_branch: candidates/<run_id>/
+  baseline_manifest: evidence/baseline_manifest.json
+  tester_exports: evidence/tester/
+  market_context: public_data_only
+  secrets: forbidden
+
+roles:
+  perplexity:
+    task: market_and_event_context
+    may_change_code: false
+    produces: observation.json
+    acceptance:
+      - every_current_claim_has_url_and_timestamp
+      - facts_are_separated_from_inference
+  deepseek:
+    task: execution_risk_and_position_math
+    may_change_code: false
+    produces: observation.json
+    acceptance:
+      - stop_target_sizing_and_cost_equations_are_explicit
+      - frozen_plan_identity_is_preserved
+  qwen:
+    task: pine_v6_causality_and_static_review
+    may_change_code: false
+    produces: observation.json
+    acceptance:
+      - no_repaint_paths_are_enumerated
+      - warnings_na_guards_and_request_security_are_checked
+  zai:
+    task: adversarial_regime_and_failure_review
+    may_change_code: false
+    produces: observation.json
+    acceptance:
+      - at_least_three_falsification_scenarios
+      - signal_starvation_and_overfit_are_checked
+  kimi:
+    task: statistical_validation_and_selection_bias
+    may_change_code: false
+    produces: observation.json
+    acceptance:
+      - fold_leakage_and_holdout_reuse_are_checked
+      - reported_metrics_belong_to_the_deployable_artifact
+  gemini:
+    task: system_security_and_test_architecture
+    may_change_code: false
+    produces: observation.json
+    acceptance:
+      - research_paper_live_boundaries_are_checked
+      - failure_and_chaos_tests_are_defined
+  meta:
+    task: state_machine_and_operational_invariants
+    may_change_code: false
+    produces: observation.json
+    acceptance:
+      - invalid_transitions_and_races_are_enumerated
+      - rollback_invariants_are_explicit
+  nvidia_nemotron:
+    task: agent_dag_gpu_and_guardrail_review
+    may_change_code: false
+    produces: observation.json
+    acceptance:
+      - agent_loop_budget_and_termination_are_checked
+      - deterministic_and_gpu_suitable_tasks_are_separated
+  claude_themis:
+    task: plan_evidence_deduplicate_synthesize
+    may_change_code: false
+    produces: decision.json
+    acceptance:
+      - all_claims_reference_evidence_ids
+      - disagreements_are_preserved
+      - next_tasks_are_bounded
+  deterministic_builder:
+    task: apply_one_allowlisted_patch_to_candidate_only
+    may_change_code: true
+    produces: candidate_and_diff
+    acceptance:
+      - baseline_is_immutable
+      - changed_files_match_allowlist
+
+dag:
+  - id: snapshot
+    type: deterministic
+    produces: [baseline_hash, input_manifest, test_manifest]
+  - id: observe_parallel
+    depends_on: [snapshot]
+    agents: [perplexity, deepseek, qwen, zai, kimi, gemini, meta, nvidia_nemotron]
+    produces: [observations]
+  - id: evidence_merge
+    depends_on: [observe_parallel]
+    agent: claude_themis
+    produces: [deduplicated_ledger, disagreements]
+  - id: candidate_design
+    depends_on: [evidence_merge]
+    agent: claude_themis
+    produces: [single_bounded_proposal]
+  - id: candidate_build
+    depends_on: [candidate_design]
+    agent: deterministic_builder
+    produces: [proposal.json, candidate_hash, unified_diff]
+  - id: deterministic_validation
+    depends_on: [candidate_build]
+    type: deterministic
+    produces: [compile_report, invariant_report, backtest_report]
+  - id: adversarial_review
+    depends_on: [deterministic_validation]
+    agents: [qwen, deepseek, zai, kimi, gemini, nvidia_nemotron]
+    produces: [gate_recommendations]
+  - id: decision
+    depends_on: [adversarial_review]
+    agent: claude_themis
+    produces: [decision]
+  - id: bounded_replan
+    depends_on: [decision]
+    when: decision == revise and iteration < max_iterations and budget_available
+    next: observe_parallel
+  - id: human_review
+    depends_on: [decision]
+    when: decision == human_review
+    type: human_gate
+  - id: archive
+    depends_on: [decision]
+    when: decision == reject
+    type: deterministic
+
+hard_gates:
+  static:
+    - pine_v6_compiles
+    - no_new_warning
+    - no_new_repaint_path
+    - confirmed_higher_timeframe_data_only
+    - inherited_input_identifiers_preserved
+    - plan_identity_preserved_across_partial_exits
+    - no_credentials_or_live_order_adapter
+  comparison:
+    - same_symbol_timeframe_range_session_and_costs
+    - full_plan_metrics_not_partial_fill_count
+    - zero_trade_candidate_is_not_an_improvement
+    - result_is_net_of_commission_slippage_and_funding
+  statistics:
+    diagnostic_min_complete_plans: 30
+    chronological_folds: 3
+    minimum_plans_per_fold: 5
+    minimum_net_profit_factor: 1.10
+    minimum_net_expectancy: 0.0
+    maximum_drawdown_ratio_vs_baseline: 0.95
+    minimum_probability_pf_above_one: 0.90
+    maximum_single_fold_profit_share: 0.60
+    cost_stress_multiplier: 1.50
+    require_positive_expectancy_under_cost_stress: true
+    note: Below sample thresholds the result remains diagnostic and cannot support a profitability claim.
+
+promotion:
+  allowed_decisions: [reject, revise, human_review]
+  automatic_publish: false
+  automatic_trading: false
+  human_approval_required_for:
+    - merge_to_main
+    - publish_indicator
+    - change_alert_payload_used_by_bots
+    - paper_trade_activation
+    - live_trade_activation
+  live_trade_activation_policy: separate_future_policy_required
+
+contracts:
+  observation: contracts/observation.schema.json
+  proposal: contracts/proposal.schema.json
+  decision: contracts/decision.schema.json
+  approval: contracts/approval.schema.json
+
+artifacts:
+  - run_manifest.json
+  - evidence_ledger.jsonl
+  - observations/
+  - proposals/
+  - candidate.diff
+  - validation_report.json
+  - decision.json
+  - human_approval.json

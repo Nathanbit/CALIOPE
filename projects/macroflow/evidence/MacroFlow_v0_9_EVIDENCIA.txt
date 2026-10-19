@@ -1,0 +1,325 @@
+INFORME DE EVIDENCIA — MACROFLOW v0.9 REA STRUCTURAL VALIDATION
+Modelo: MF-0.9.0-REA-VAL
+Fecha de cierre de revisión: 17 de octubre de 2026
+
+1. CONCLUSIÓN EJECUTIVA
+
+MacroFlow v0.9 quedó implementado y compilado como una versión de validación
+estructural. El trabajo fortalece la causalidad de los datos, el registro por
+plan completo, el cálculo de costes, el control contractual y los vetos de
+riesgo. No se añadieron nuevas familias de señales ni más indicadores visuales.
+
+La versión compila y está activa en TradingView. Sin embargo, el tramo visible
+de BINANCE:BTCUSDT en 5 minutos (27 de septiembre a 17 de octubre de 2026) no
+produjo operaciones con los parámetros predeterminados. Por eso esta revisión
+demuestra integridad de implementación, pero todavía no demuestra una mejora de
+rentabilidad o drawdown de v0.9.
+
+El resultado previo EMA + Pearson 15m (P&L +34,73 USD; PF 1,343) pertenece a
+v0.8 y es evidencia in-sample. Se usa únicamente para escoger EMA como baseline;
+no debe presentarse como rendimiento de v0.9 ni como expectativa futura.
+
+2. IDENTIDAD Y HUELLA DEL ARTEFACTO
+
+Archivo:
+macroflow/MacroFlow_Backtest_v0_9_VALIDATION.pine
+
+Huella final verificada:
+- Pine Script: versión 6.
+- Modelo interno: MF-0.9.0-REA-VAL.
+- Líneas: 2.005.
+- Inputs: 136.
+- Inputs heredados de v0.8: 119, conservados por nombre y orden.
+- Inputs nuevos: 17, anexados al grupo de validación estructural.
+- request.security(): 19.
+- Llamadas con lookahead_on: 19, siempre sobre expresiones confirmadas.
+- Series ocultas DIAG_*: 7.
+- SHA-256:
+  5AC20BFD0C52D5C8C26942846CFFB57BDA766C528F9212956CBFEE35876FDC25
+
+Evidencia del compilador de TradingView:
+- 16:06:38: Compilando...
+- 16:07:08: "MacroFlow v0.9 Structural Validation" guardado.
+- No apareció un error ni un aviso nuevo entre esas dos entradas.
+- El indicador activo del gráfico quedó identificado como MF BT V09.
+
+3. EVIDENCIA DE LAS MODIFICACIONES
+
+3.1. Tendencia por defecto y HMA adaptativo
+
+- EMA es ahora el estimador predeterminado.
+- El modo HMA Blend queda explícitamente experimental.
+- Su peso se calcula con una aproximación de Kaufman Efficiency Ratio y un
+  filtro de varianza relativa.
+- El HMA sube gradualmente durante tendencias eficientes y ordenadas.
+- El peso máximo predeterminado del HMA es 25%.
+- Cuando baja la eficiencia, faltan datos o aumenta demasiado la varianza, el
+  peso vuelve hacia 0%, dejando 100% EMA.
+- La EMA 200 permanece intacta como ancla de sobreextensión.
+
+Esto reduce el riesgo de promover una variante más rápida sólo porque obtuvo un
+mejor resultado por selección retrospectiva.
+
+3.2. Seguridad MTF sin repinte
+
+Las 19 lecturas externas usan información cerrada:
+- Las series macro, transmisión y correlación solicitan valores desplazados [1].
+- Las tres confirmaciones MTF llaman a una función que retorna trend[1].
+- lookahead_on no recibe directamente una vela superior abierta.
+
+La construcción evita anticipar datos futuros. La confirmación definitiva de
+no repinte requiere Replay y comparación de señales históricas contra señales
+guardadas en tiempo real.
+
+3.3. Pearson 15 minutos con consistencia 2 de 3
+
+Una correlación sólo habilita grados A/B cuando cumple simultáneamente:
+- |r| >= 0,25.
+- |t| >= 2,0.
+- Muestra completa y datos frescos.
+- Dos de las últimas tres ventanas confirmadas significativas tienen el mismo
+  signo.
+
+El dashboard muestra r, t, N y el consenso. La transmisión sólo se orienta con
+Pearson después de pasar esta prueba.
+
+3.4. Contexto tradicional cerrado para cripto
+
+El modelo combina el horario cash de Nueva York con la frescura real de SPY.
+Cuando cripto continúa operando y el contexto tradicional está cerrado puede:
+- Degradar A/B a C, que es la política predeterminada.
+- Aplicar decay exponencial al último contexto observado.
+
+Esto evita tratar una cotización congelada de SPY como información en vivo. Los
+feriados se infieren por horario y frescura; Pine no incorpora aquí un calendario
+oficial de feriados bursátiles.
+
+3.5. Equity real, presets y validación contractual
+
+- El riesgo monetario utiliza strategy.equity.
+- El input de capital anterior permanece sólo como auditor de sincronización
+  contra strategy.initial_capital.
+- El dashboard marca SYNC o DESYNC según la tolerancia configurada.
+- El bloque de presets distingue spot cripto, perpetuos, futuros CME, CFD,
+  metadatos del feed y configuración manual.
+- Para CME, CFD o un feed genérico sin pointvalue válido, la infraestructura
+  falla de forma cerrada y bloquea nuevas entradas. El usuario debe introducir
+  el valor por punto y multiplicador mediante Manual.
+- Cripto lineal puede usar valor unitario cuando el feed no aporta pointvalue;
+  contratos inversos deben validarse manualmente.
+
+3.6. Daily Max Loss
+
+- Parte del equity al inicio de time_tradingday.
+- Incluye P&L realizado y flotante.
+- Se evalúa en barras confirmadas para mantener paridad entre histórico y vivo.
+- Una vez alcanzado, queda enclavado aunque el equity se recupere ese mismo día.
+- Bloquea entradas nuevas y se reinicia al cambiar el día de negociación.
+- No fuerza el cierre de una posición ya abierta.
+
+3.7. Registro por plan completo
+
+La unidad estadística es el plan, no cada salida. Un esquema 50/30/20 aumenta N
+una sola vez cuando desaparece toda la posición.
+
+Por setup, grado y lado se registra:
+- N de planes completos.
+- Ganadores y Profit Factor.
+- P&L neto ajustado.
+- Comisión observada por el emulador.
+- Slippage porcentual estimado.
+- Funding estimado.
+- MFE y MAE en unidades R.
+- Duración en barras.
+
+La duración se calcula como:
+max(exit_bar - entry_bar, 1)
+
+Esto evita el +1 artificial de la versión auditada inicialmente.
+
+3.8. MFE y MAE reconciliados con fills
+
+Mientras una posición está visible, el motor actualiza las excursiones con OHLC
+confirmado. Al cerrar, también consulta max_runup y max_drawdown de cada fill de
+strategy.closedtrades, normalizados por el riesgo monetario de ese parcial.
+
+Esta doble reconciliación cubre:
+- Planes que abren y cierran antes de que Pine observe un estado intermedio no
+  plano.
+- La vela terminal.
+- Salidas parciales con distinta duración.
+- El precio, barra y hora reales de entrada del emulador.
+
+El resultado sigue dependiendo del modelo intrabar de TradingView. Para datos
+de mayor precisión debe probarse Bar Magnifier y feeds con suficiente historia.
+
+3.9. Costes netos
+
+La comisión de 0,08% declarada en strategy() ya está incluida en
+strategy.netprofit y se registra sin volver a descontarla.
+
+El neto diagnóstico es:
+P&L ajustado = variación de strategy.netprofit
+               - slippage estimado
+               - funding estimado
+
+El slippage se calcula sobre el turnover real de entrada y salida de cada
+parcial. El funding se acumula por intervalos y se reconcilia con la hora del
+último fill, aun cuando la posición ya aparece plana.
+
+El Strategy Tester nativo conserva slippage=0 porque Pine no permite convertir
+el input porcentual dinámico en ticks dentro de strategy(). Por eso el P&L
+nativo de TradingView y el P&L ajustado de MacroFlow son métricas distintas.
+
+3.10. Órdenes y webhooks
+
+- ENTRY sólo se envía por alert() si la orden pasa fecha, dirección, cantidad,
+  preset, Daily Max Loss y ausencia de otra posición.
+- Las señales filtradas pueden quedar en telemetría como MODEL_SIGNAL, pero no
+  se anuncian como entradas ejecutables.
+- Los mensajes de fills de strategy.entry/exit conservan JSON formal con los
+  placeholders nativos de TradingView.
+- Si el emulador no produce posición ni fill después de una orden de mercado,
+  el motor elimina el bucket pendiente, restaura el setup consumido y limpia el
+  estado operativo. Así no queda una fila PEND. ni un plan fantasma.
+
+4. EVIDENCIA VISIBLE EN EL DASHBOARD
+
+El panel final contiene:
+- Score y grado fundamental.
+- Transmisión validada y estado risk-on/risk-off.
+- Microestructura y MTF.
+- Vetos de riesgo.
+- ATR y cantidad sugerida.
+- Z-scores de SPY, VIX y DXY.
+- Pearson r, t, N y consistencia 2/3.
+- Contexto tradicional abierto, cerrado o en decay.
+- P&L diario y Daily Lock.
+- N real de planes y duración media.
+- P&L ajustado, slippage y funding acumulados.
+- MFE, MAE y eficiencia MFE/MAE.
+- Equity, preset y sincronización del capital.
+
+En la captura de validación, BTCUSDT 5m mostraba:
+- Contexto: CERRADO -> C.
+- Pearson: r 0,70; t 4,16; N 20; consistencia 3/3 positiva.
+- Daily P&L: 0; sin bloqueo.
+- Preset: Crypto spot; capital sincronizado.
+- Acción: SIN OPERACIÓN.
+- Planes completos en el tramo: N=0.
+
+5. QUÉ QUEDÓ DEMOSTRADO Y QUÉ NO
+
+Quedó demostrado:
+- Compilación Pine v6 exitosa.
+- Conservación exacta de los 119 inputs heredados.
+- 19 lecturas MTF confirmadas.
+- Registro de una observación por plan completo.
+- Reconciliación de cierres rápidos y parciales.
+- Costes diagnósticos sin doble comisión.
+- Alertas ENTRY ligadas a órdenes ejecutables.
+- Veto diario persistente y presets con fallo seguro.
+
+No quedó demostrado todavía:
+- Que v0.9 gane más que v0.8.
+- Que reduzca drawdown fuera de muestra.
+- Que el HMA adaptativo supere a EMA.
+- Que los resultados resistan otros activos, feeds y periodos.
+- Que exista una ventaja explotable con N=0 en el tramo visible.
+
+6. LIMITACIONES MATERIALES
+
+1) Las tres ventanas Pearson se solapan; no son muestras independientes. El
+estadístico t es un filtro operativo y no prueba causalidad.
+
+2) Pine no expone el funding histórico real del perpetuo. El módulo usa una tasa
+positiva fija; no reproduce tasas variables ni cobros a favor.
+
+3) La detección de feriados es indirecta. Horario y frescura de SPY no sustituyen
+un calendario oficial.
+
+4) pointvalue y mincontract dependen del proveedor. Todo CFD, futuro o contrato
+inverso debe cotejarse con la ficha contractual.
+
+5) El slippage ajustado aparece en dashboard y tabla; las siete series DIAG_*
+conservan bucket, comisión, neto ajustado, funding, MFE, MAE y duración. No se
+añadió una octava serie porque el script ya alcanza el límite de plots permitido
+por TradingView.
+
+6) El Daily Max Loss puede bloquear por una pérdida flotante. Eso es deliberado,
+pero debe coincidir con la política real de la cuenta.
+
+7) Una compilación correcta no valida una estrategia. El riesgo de selección,
+autocorrelación, dependencia del régimen y concentración por setup permanece.
+
+7. PROTOCOLO DE VALIDACIÓN RECOMENDADO
+
+A. Pruebas funcionales
+- Confirmar en Replay que una señal cerrada no cambia.
+- Verificar manualmente un plan con salidas 50/30/20: N debe aumentar una vez.
+- Reconciliar fills, comisión, slippage, funding y P&L ajustado.
+- Forzar una orden sin margen y comprobar que no quede plan fantasma.
+- Forzar el Daily Max Loss, observar el bloqueo y verificar el reinicio al nuevo
+  time_tradingday.
+- Validar valor por punto, step y multiplicador en spot, perpetuo, CME y CFD.
+
+B. Comparación controlada
+- v0.8 EMA + Pearson 15m.
+- v0.9 EMA baseline.
+- v0.9 HMA Blend adaptativo.
+
+Usar el mismo símbolo, feed, timeframe, fechas, capital, comisiones, slippage,
+funding y Bar Magnifier. No reajustar parámetros después de ver el tramo final.
+
+C. Partición temporal
+- Desarrollo.
+- Validación.
+- Prueba final ciega.
+
+Una alternativa más robusta es walk-forward con purga entre ventanas para evitar
+contaminación por indicadores largos y posiciones próximas al corte.
+
+D. Tamaño mínimo de muestra
+- No interpretar el resultado global con menos de 100 planes completos.
+- No promover un setup/grado/lado con menos de 30 planes.
+- Presentar intervalos de confianza o bootstrap externo, no sólo PF y win rate.
+
+E. Métricas de decisión
+- P&L ajustado.
+- Expectativa por plan.
+- Profit Factor.
+- Máximo drawdown.
+- MFE/MAE y eficiencia.
+- Duración y exposición.
+- Concentración del beneficio por activo y setup.
+- Porcentaje de señales vetadas por Pearson, contexto y pérdida diaria.
+- Sensibilidad a costes.
+
+F. Estrés
+- Comisión y slippage a 1,5x y 2x.
+- Funding adverso.
+- Entrada retrasada una vela.
+- Bar Magnifier activado/desactivado.
+- Distintos feeds del mismo activo.
+- Fines de semana, feriados y alta volatilidad.
+- Perturbaciones moderadas de parámetros sin reoptimizar.
+
+8. CRITERIO DE ACEPTACIÓN DE v0.9
+
+Promover v0.9 sólo si:
+- La contabilidad coincide con los fills dentro de tolerancia de redondeo.
+- No repinta en Replay.
+- No genera ENTRY sin orden aceptada.
+- Mantiene P&L ajustado positivo fuera de muestra.
+- No empeora materialmente el drawdown respecto al baseline EMA.
+- Sobrevive a costes de 1,5x y conserva comportamiento razonable a 2x.
+- La ventaja no depende de un único periodo, activo o setup.
+- HMA Blend supera de forma repetida a EMA antes de dejar de ser experimental.
+
+COMENTARIO FINAL
+
+La mejora más valiosa de v0.9 no es una nueva señal; es separar con claridad
+señal, orden, fill, parcial y plan. Esto reduce el sesgo estadístico y permite
+saber qué parte del resultado proviene del modelo y cuál proviene de costes,
+contexto o ejecución. El siguiente paso correcto es recolectar muestra fuera de
+la ventana actual, no añadir más parámetros.

@@ -1,0 +1,121 @@
+# Themis - configuración de proveedores
+# Las claves se leen de variables de entorno (nunca se guardan aquí).
+# Los IDs de modelo cambian con frecuencia: ejecuta `python -m themis models`
+# para descubrir los que tu cuenta realmente ofrece y ajusta esta lista.
+#
+# tier:    free | paid | local
+# tags:    reasoning, long_context, fast, cheap, json, finance, legal, multilingual
+# privacy: local        -> los datos no salen de tu equipo
+#          no_train     -> el proveedor declara no entrenar con tus datos (API de pago / ZDR)
+#          may_train    -> niveles gratuitos que pueden usar tus datos: NUNCA para material confidencial
+
+policy:
+  mode: balanced            # free_first | balanced | quality_first
+  default_sensitivity: confidential   # public | confidential  (más seguro por defecto)
+  max_cost_usd_per_run: 2.0
+  cooldown_seconds: 60      # pausa de un proveedor tras un 429 / error
+  cache: true               # caché local SQLite de respuestas deterministas (runs/cache.sqlite)
+  cache_ttl_seconds: 3600
+  max_replan_rounds: 1      # rondas extra para cerrar brechas detectadas
+  check_links_live: true    # la compuerta mecánica comprueba que las URLs citadas existan
+
+providers:
+  ollama:
+    kind: openai
+    base_url: http://localhost:11434/v1
+    api_key_env: null
+    privacy: local
+    models:
+      - {id: "llama3.3:70b", tier: local, tags: [reasoning, multilingual, json], ctx: 128000}
+      - {id: "qwen2.5:14b",  tier: local, tags: [fast, cheap, json], ctx: 32000}
+
+  lmstudio:
+    kind: openai
+    base_url: http://localhost:1234/v1
+    api_key_env: null
+    privacy: local
+    models:
+      - {id: "local-model", tier: local, tags: [fast, cheap], ctx: 32000}
+
+  groq:
+    kind: openai
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    privacy: may_train
+    models:
+      - {id: "llama-3.3-70b-versatile", tier: free, tags: [fast, reasoning, json], ctx: 128000}
+
+  cerebras:
+    kind: openai
+    base_url: https://api.cerebras.ai/v1
+    api_key_env: CEREBRAS_API_KEY
+    privacy: may_train
+    models:
+      - {id: "llama-3.3-70b", tier: free, tags: [fast, reasoning], ctx: 64000}
+
+  gemini:
+    kind: openai
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    api_key_env: GEMINI_API_KEY
+    privacy: may_train        # el nivel gratuito puede usar datos; con facturación activa cambia
+    models:
+      - {id: "gemini-2.5-flash", tier: free, tags: [long_context, fast, json, multilingual], ctx: 1000000}
+      - {id: "gemini-2.5-pro",   tier: paid, tags: [long_context, reasoning, finance, legal], ctx: 1000000,
+         cost_in: 1.25, cost_out: 10.0}
+
+  openrouter:
+    kind: openai
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    privacy: may_train
+    models:
+      - {id: "deepseek/deepseek-chat-v3-0324:free", tier: free, tags: [reasoning, cheap], ctx: 64000}
+      - {id: "openrouter/auto", tier: paid, tags: [reasoning], ctx: 128000, cost_in: 3.0, cost_out: 12.0}
+
+  mistral:
+    kind: openai
+    base_url: https://api.mistral.ai/v1
+    api_key_env: MISTRAL_API_KEY
+    privacy: may_train
+    models:
+      - {id: "mistral-large-latest", tier: free, tags: [multilingual, legal, json], ctx: 128000}
+
+  deepseek:
+    kind: openai
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    privacy: may_train
+    models:
+      - {id: "deepseek-reasoner", tier: paid, tags: [reasoning, finance, cheap], ctx: 64000, cost_in: 0.55, cost_out: 2.2}
+
+  openai:
+    kind: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    privacy: no_train          # la API no entrena con tus datos por defecto
+    models:
+      - {id: "gpt-4.1", tier: paid, tags: [reasoning, json, legal, finance], ctx: 1000000, cost_in: 2.0, cost_out: 8.0}
+      - {id: "gpt-4.1-mini", tier: paid, tags: [fast, cheap, json], ctx: 1000000, cost_in: 0.4, cost_out: 1.6}
+
+  anthropic:
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    privacy: no_train
+    models:
+      - {id: "claude-opus-5-5",   tier: paid, tags: [reasoning, legal, finance, long_context], ctx: 200000, cost_in: 15.0, cost_out: 75.0}
+      - {id: "claude-sonnet-5-5", tier: paid, tags: [reasoning, legal, finance, json], ctx: 200000, cost_in: 3.0, cost_out: 15.0}
+      - {id: "claude-haiku-5-5",  tier: paid, tags: [fast, cheap, json], ctx: 200000, cost_in: 1.0, cost_out: 5.0}
+
+# Cada agente declara qué necesita; el router elige el mejor modelo disponible.
+agents:
+  planner:           {needs: [reasoning, json], sensitivity: inherit}
+  fact_extractor:    {needs: [reasoning, long_context, json], sensitivity: inherit}
+  legal_researcher:  {needs: [reasoning, legal, long_context], sensitivity: inherit}
+  adversarial_researcher: {needs: [reasoning, legal, long_context], sensitivity: inherit}
+  contract_analyst:  {needs: [reasoning, legal, long_context], sensitivity: inherit}
+  financial_analyst: {needs: [reasoning, finance, json], sensitivity: inherit}
+  forensic_reviewer: {needs: [reasoning, finance], sensitivity: inherit}
+  drafter:           {needs: [reasoning, multilingual], sensitivity: inherit}
+  verifier:          {needs: [reasoning, json], sensitivity: inherit}
+  synthesizer:       {needs: [reasoning, multilingual], sensitivity: inherit}

@@ -1,0 +1,2122 @@
+//@version=6
+//@strategy_alert_message {"action":"{{strategy.order.action}}","order_id":"{{strategy.order.id}}","price":{{strategy.order.price}},"ticker":"{{ticker}}","volume":{{strategy.order.contracts}},"meta":{{strategy.order.alert_message}}}
+strategy("MacroFlow v0.9.3 REA - Structural Validation", shorttitle = "MF BT V093", overlay = true, pyramiding = 0, initial_capital = 10000, currency = currency.USD, commission_type = strategy.commission.percent, commission_value = 0.08, slippage = 0, margin_long = 25, margin_short = 25, process_orders_on_close = true, calc_on_order_fills = false, calc_on_every_tick = true, max_labels_count = 200)
+
+const string MODEL_VERSION = "MF-0.9.3-REA-VAL"
+
+// MacroFlow v0.9 REA separates three independent questions:
+// 1) Fundamental regime: slow policy, inflation and financial-condition data.
+// 2) Market transmission: whether cross-asset markets are pricing risk-on/off.
+// 3) Microstructure: whether the traded instrument offers an executable setup.
+// Confirmed-bar setups include opening-range behavior and original reaction-zone
+// rules based on observable EMA/VWAP/pivot behavior. No proprietary rules are
+// claimed. Signals are plans, not fills, and grades are not probabilities.
+// O = observed feed data, D = derived transformation, I = model inference.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inputs
+// ─────────────────────────────────────────────────────────────────────────────
+string G_MODE = "1. Model and profile"
+string mode = input.string("Scalp", "Operating mode", options = ["Scalp", "Intraday", "Swing", "Custom"], group = G_MODE)
+string customGateMode = input.string("Scalp", "Custom gate rules", options = ["Scalp", "Intraday", "Swing"], tooltip = "When Operating mode is Custom, weights remain custom while data freshness and directional gates follow this profile.", group = G_MODE)
+string profile = input.string("Crypto / Risk assets", "Transmission profile", options = ["Crypto / Risk assets", "US indices"], group = G_MODE)
+string frequencyProfile = input.string("Equilibrado", "Signal frequency", options = ["Selectivo", "Equilibrado", "Activo"], tooltip = "Adjusts score, MTF, cost and cooldown thresholds without changing the underlying setup definitions.", group = G_MODE)
+string experimentId = input.string("REA-0064", "Experiment ID", tooltip = "Change this ID whenever model rules or parameters change.", group = G_MODE)
+float customFundWeight = input.float(20.0, "Custom fundamental weight", minval = 0, maxval = 100, group = G_MODE)
+float customTransWeight = input.float(30.0, "Custom transmission weight", minval = 0, maxval = 100, group = G_MODE)
+float customMicroWeight = input.float(50.0, "Custom micro weight", minval = 0, maxval = 100, group = G_MODE)
+
+string G_MACRO = "2. Fundamental regime"
+string macroTf = input.timeframe("D", "Macro timeframe", group = G_MACRO)
+int macroRocLen = input.int(5, "Change length", minval = 1, group = G_MACRO)
+int macroNormLen = input.int(100, "Normalization length", minval = 30, group = G_MACRO)
+string us02ySymbol = input.symbol("TVC:US02Y", "US 2Y yield", group = G_MACRO)
+string real10ySymbol = input.symbol("FRED:DFII10", "US 10Y real yield", group = G_MACRO)
+string breakevenSymbol = input.symbol("FRED:T10YIE", "10Y breakeven inflation", group = G_MACRO)
+string oilSymbol = input.symbol("NYMEX:CL1!", "WTI crude oil", group = G_MACRO)
+string nfciSymbol = input.symbol("FRED:NFCI", "Financial conditions index", group = G_MACRO)
+bool includeOilInInflation = input.bool(true, "Include oil in inflation factor", group = G_MACRO)
+
+string G_TRANS = "3. Market transmission"
+string transTf = input.timeframe("15", "Transmission timeframe", group = G_TRANS)
+int transRocLen = input.int(4, "Change length", minval = 1, group = G_TRANS)
+int transNormLen = input.int(80, "Normalization length", minval = 30, group = G_TRANS)
+int maxLiveTransmissionMinutes = input.int(30, "Maximum live-data age (minutes)", minval = 15, maxval = 240, tooltip = "Contextual Scalp/Intraday grades A/B require cross-asset data no older than this limit. Closed-session crypto Technical B uses current crypto evidence instead.", group = G_TRANS)
+string spySymbol = input.symbol("AMEX:SPY", "Broad market", group = G_TRANS)
+string qqqSymbol = input.symbol("NASDAQ:QQQ", "Growth market", group = G_TRANS)
+string vixSymbol = input.symbol("CBOE:VIX", "Volatility", group = G_TRANS)
+string dxySymbol = input.symbol("TVC:DXY", "US dollar", group = G_TRANS)
+string hygSymbol = input.symbol("AMEX:HYG", "High-yield credit", group = G_TRANS)
+string iefSymbol = input.symbol("NASDAQ:IEF", "Treasury comparison", group = G_TRANS)
+string rspSymbol = input.symbol("AMEX:RSP", "Equal-weight breadth", group = G_TRANS)
+string smhSymbol = input.symbol("NASDAQ:SMH", "Semiconductors", group = G_TRANS)
+float transExtremeZ = input.float(2.0, "Transmission extreme threshold (Z)", minval = 1.0, maxval = 4.0, step = 0.25, tooltip = "Classifies confirmed SPY/VIX/DXY moves beyond ±Z standard deviations as explicit risk extremes.", group = G_TRANS)
+bool requireCorrelationEvidence = input.bool(true, "Require significant transmission correlation", tooltip = "Contextual Grades A/B require a confirmed short-term Pearson relationship. Closed-session crypto Technical B treats stale Pearson as observation and relies on current crypto evidence instead.", group = G_TRANS)
+string correlationReference = input.string("SPY", "Correlation reference", options = ["SPY", "VIX"], group = G_TRANS)
+string correlationTf = input.timeframe("15", "Correlation timeframe", tooltip = "Must be equal to or higher than the chart timeframe. Confirmed source-bar returns are used.", group = G_TRANS)
+int correlationLookback = input.int(20, "Correlation observations", minval = 10, maxval = 100, group = G_TRANS)
+float minAbsCorrelation = input.float(0.25, "Minimum |Pearson r|", minval = 0.05, maxval = 0.95, step = 0.05, group = G_TRANS)
+float minCorrelationTStat = input.float(2.0, "Minimum correlation |t|", minval = 1.0, maxval = 5.0, step = 0.25, tooltip = "Approximate two-sided significance control using t = r·sqrt((n−2)/(1−r²)).", group = G_TRANS)
+
+string G_MICRO = "4. Microstructure"
+string trendEstimator = input.string("EMA", "Trend estimator", options = ["HMA blend", "HMA", "EMA"], tooltip = "EMA is the validated baseline. HMA blend is experimental and its HMA weight adapts to trend efficiency and variance. Pure HMA remains available only for controlled comparison.", group = G_MICRO)
+int fastLen = input.int(20, "Fast EMA", minval = 2, group = G_MICRO)
+int slowLen = input.int(65, "Setup EMA", minval = 5, group = G_MICRO)
+int longTrendLen = input.int(200, "Long-trend EMA (score bonus)", minval = 20, group = G_MICRO)
+bool useExtensionFade = input.bool(true, "Use far-from-MA reversal", tooltip = "Enables the experimental volatility-normalized reversal. TREND_PULLBACK remains part of the core reaction model. No proprietary WSGTA rules are claimed.", group = G_MICRO)
+int rsiLen = input.int(14, "Reversal RSI length", minval = 2, group = G_MICRO)
+float rsiOversold = input.float(30.0, "Reversal RSI oversold", minval = 5, maxval = 45, step = 1, group = G_MICRO)
+float rsiOverbought = input.float(70.0, "Reversal RSI overbought", minval = 55, maxval = 95, step = 1, group = G_MICRO)
+float farMaAtr = input.float(1.50, "Far-from-MA distance in ATR", minval = 0.50, maxval = 5.0, step = 0.10, tooltip = "Normalizes overextension across BTC, indices and other instruments instead of using a fixed dollar distance.", group = G_MICRO)
+int pivotLen = input.int(3, "Confirmed pivot sides", minval = 1, maxval = 10, group = G_MICRO)
+int volLen = input.int(20, "Relative-volume length", minval = 5, group = G_MICRO)
+float minRelVolume = input.float(1.20, "Preferred relative volume", minval = 0.5, step = 0.05, group = G_MICRO)
+float minBodyEfficiency = input.float(0.55, "Breakout body/range", minval = 0.1, maxval = 1, step = 0.05, group = G_MICRO)
+bool requireVolumeEvidence = input.bool(true, "Require observed volume for A/B", tooltip = "Disable only for feeds that genuinely do not provide useful volume. Missing volume is never treated as normal volume.", group = G_MICRO)
+float reactionToleranceAtr = input.float(0.15, "Reaction-zone tolerance in ATR", minval = 0.02, maxval = 0.75, step = 0.01, tooltip = "Distance allowed around EMA20, setup EMA, operative VWAP or the latest confirmed pivot.", group = G_MICRO)
+bool useVoidBonus = input.bool(true, "Use fresh 3-candle void bonus", tooltip = "Uses a causal three-candle imbalance and consumes it on its first mitigation. It adds score or a reaction zone; it never gates a setup.", group = G_MICRO)
+float minVoidAtr = input.float(0.10, "Minimum void height in ATR", minval = 0.02, maxval = 1.0, step = 0.01, group = G_MICRO)
+string mtf1 = input.timeframe("15", "Fast confirmation TF 1", group = G_MICRO)
+string mtf2 = input.timeframe("60", "Fast confirmation TF 2", group = G_MICRO)
+string mtf3 = input.timeframe("240", "Slow confirmation TF", group = G_MICRO)
+float extensionStdevMult = input.float(2.00, "Extension standard deviations", minval = 1.00, maxval = 4.00, step = 0.25, tooltip = "EXT_FADE requires price to exceed both this EMA200 deviation band and the existing ATR distance.", group = G_MICRO)
+int divergenceMaxBars = input.int(80, "Maximum bars between RSI pivots", minval = 5, maxval = 300, tooltip = "Limits confirmed regular RSI divergence to structurally related pivots.", group = G_MICRO)
+
+string G_OPEN = "5. Opening range"
+bool useOpeningRange = input.bool(true, "Use opening-range logic", group = G_OPEN)
+string orHours = input.session("0930-1000", "Opening range", group = G_OPEN)
+string orDays = input.string("1234567", "Session days", tooltip = "1=Sunday, 7=Saturday. Use 23456 for US index weekdays.", group = G_OPEN)
+string orTimezone = input.string("America/New_York", "Session timezone", group = G_OPEN)
+int retestBars = input.int(8, "Retest window in bars", minval = 1, maxval = 30, group = G_OPEN)
+float breakoutBufferAtr = input.float(0.05, "Breakout buffer in ATR", minval = 0, step = 0.01, group = G_OPEN)
+float retestToleranceAtr = input.float(0.10, "Retest tolerance in ATR", minval = 0.01, step = 0.01, group = G_OPEN)
+float retestMaxPenetrationAtr = input.float(0.50, "Maximum retest penetration in ATR", minval = 0.10, maxval = 2.0, step = 0.05, tooltip = "Allows a deeper sweep through the level, but still requires a confirmed reclaim close outside the box.", group = G_OPEN)
+float maxChaseAtr = input.float(0.35, "Maximum chase distance in ATR", minval = 0.05, step = 0.05, group = G_OPEN)
+int maxOpeningAgeMinutes = input.int(720, "Maximum opening-range age (minutes)", minval = 30, maxval = 2880, group = G_OPEN)
+
+string G_CAL = "6. Economic calendar"
+bool calendarFilter = input.bool(true, "Block entries around events", group = G_CAL)
+int minutesBefore = input.int(30, "Minutes blocked before", minval = 0, maxval = 240, group = G_CAL)
+int minutesAfter = input.int(20, "Minutes blocked after", minval = 0, maxval = 240, group = G_CAL)
+bool event1Enabled = input.bool(false, "Enable event 1", group = G_CAL, inline = "E1")
+string event1Name = input.string("FOMC/CPI", "Name", group = G_CAL, inline = "E1")
+int event1Time = input.time(timestamp("01 Jan 2026 00:00 +0000"), "Time", group = G_CAL)
+bool event2Enabled = input.bool(false, "Enable event 2", group = G_CAL, inline = "E2")
+string event2Name = input.string("Employment", "Name", group = G_CAL, inline = "E2")
+int event2Time = input.time(timestamp("01 Jan 2026 00:00 +0000"), "Time", group = G_CAL)
+bool event3Enabled = input.bool(false, "Enable event 3", group = G_CAL, inline = "E3")
+string event3Name = input.string("Retail/PMI", "Name", group = G_CAL, inline = "E3")
+int event3Time = input.time(timestamp("01 Jan 2026 00:00 +0000"), "Time", group = G_CAL)
+
+string G_RISK = "7. Execution and risk"
+int atrLen = input.int(14, "ATR length", minval = 2, group = G_RISK)
+float fallbackStopAtr = input.float(1.5, "Fallback stop in ATR", minval = 0.5, step = 0.1, group = G_RISK)
+float pivotBufferAtr = input.float(0.15, "Structural-stop buffer in ATR", minval = 0.02, step = 0.05, group = G_RISK)
+float minStopAtr = input.float(0.80, "Minimum stop distance in ATR", minval = 0.2, step = 0.1, group = G_RISK)
+float maxStopAtr = input.float(2.50, "Maximum stop distance in ATR", minval = 0.5, step = 0.1, group = G_RISK)
+float tp1R = input.float(1.00, "TP1 reward/risk", minval = 0.5, step = 0.25, group = G_RISK)
+float tp2R = input.float(2.00, "TP2 reward/risk", minval = 1.0, step = 0.25, tooltip = "Values below TP1 are raised internally to TP1.", group = G_RISK)
+float tp3R = input.float(3.00, "TP3 reward/risk", minval = 1.0, step = 0.25, tooltip = "Values below TP2 are raised internally to TP2.", group = G_RISK)
+float tp1ExitPct = input.float(50.0, "Position closed at TP1 (%)", minval = 0, maxval = 100, step = 5, group = G_RISK)
+float tp2ExitPct = input.float(30.0, "Position closed at TP2 (%)", minval = 0, maxval = 100, step = 5, tooltip = "Any remaining share is assigned to TP3. Defaults are 50/30/20.", group = G_RISK)
+float feePerSidePct = input.float(0.08, "Fee per side (%)", minval = 0, step = 0.01, group = G_RISK)
+float slippagePerSidePct = input.float(0.02, "Slippage per side (%)", minval = 0, step = 0.01, group = G_RISK)
+float minNetRRA = input.float(1.30, "Net R:R floor for A", minval = 0.5, step = 0.1, tooltip = "Acts as the user's hard floor. Equilibrado and Selectivo can raise it.", group = G_RISK)
+float minNetRRB = input.float(0.90, "Net R:R floor for B", minval = 0.5, step = 0.1, tooltip = "Acts as the user's hard floor. Equilibrado and Selectivo can raise it.", group = G_RISK)
+float maxCostLoad = input.float(0.50, "Maximum costs / gross target", minval = 0.05, maxval = 1, step = 0.05, tooltip = "Acts as the user's hard ceiling. Equilibrado and Selectivo can tighten it.", group = G_RISK)
+int cooldownBars = input.int(4, "Base cooldown after plan", minval = 0, maxval = 100, tooltip = "The frequency profile adjusts this value.", group = G_RISK)
+int maxPlanBars = input.int(36, "Maximum active-plan bars", minval = 2, maxval = 500, tooltip = "A displayed plan expires after this many chart bars if neither stop nor final target was touched.", group = G_RISK)
+int maxWatchBars = input.int(3, "Maximum WATCH bars", minval = 1, maxval = 20, tooltip = "A WATCH is a short-lived candidate. It clears sooner if its stop, TP1 or trend invalidation is touched.", group = G_RISK)
+bool useAtrTrail = input.bool(true, "Trail remaining position after TP1", tooltip = "After the first partial fill, the remaining brackets use a close-confirmed ATR stop that can only tighten.", group = G_RISK)
+float trailAtrMult = input.float(1.50, "Post-TP1 trailing distance in ATR", minval = 0.50, maxval = 5.00, step = 0.10, group = G_RISK)
+int breakevenOffsetTicks = input.int(0, "Breakeven offset (ticks)", minval = 0, maxval = 1000, tooltip = "Optional positive offset beyond entry after TP1. Trading costs are not inferred automatically.", group = G_RISK)
+
+string G_VIEW = "8. Display"
+bool showDashboard = input.bool(true, "Show dashboard", group = G_VIEW)
+bool showOpeningRange = input.bool(true, "Show opening range", group = G_VIEW)
+bool showPivots = input.bool(false, "Show confirmed pivots", group = G_VIEW)
+bool showLevels = input.bool(true, "Show latest setup levels", group = G_VIEW)
+bool paintBars = input.bool(false, "Color bars by micro score", group = G_VIEW)
+bool showWatchCandidates = input.bool(true, "Show grade-C WATCH markers", tooltip = "Plots one small marker when a new grade-C setup becomes worth monitoring.", group = G_VIEW)
+
+string G_ALERT = "9. Alerts"
+bool alertWatchCandidates = input.bool(false, "Alert WATCH candidates", tooltip = "ENTRY alerts always use alert(). Enable this only if Any alert() should also notify grade-C WATCH events.", group = G_ALERT)
+
+string G_BT = "10. Strategy Tester"
+string btSizeMode = input.string("Risk %", "Position sizing", options = ["Risk %", "Fixed quantity"], group = G_BT)
+float btInitialCapital = input.float(10000.0, "Initial capital for risk model", minval = 100.0, step = 100.0, tooltip = "Legacy profile value retained for compatibility. Position sizing uses strategy.equity; this input now audits synchronization with Strategy Properties › Initial capital.", group = G_BT)
+float btRiskPct = input.float(0.50, "Equity risk per trade (%)", minval = 0.01, maxval = 10.0, step = 0.05, group = G_BT)
+float btFixedQty = input.float(0.001, "Fixed quantity", minval = 0.000001, step = 0.001, group = G_BT)
+float btQtyStep = input.float(0.001, "Quantity step", minval = 0.000001, step = 0.001, tooltip = "Use 0.001 for fractional crypto or 1 for whole futures contracts.", group = G_BT)
+float btMaxExposurePct = input.float(300.0, "Maximum notional / equity (%)", minval = 1.0, maxval = 300.0, step = 10.0, tooltip = "Hard cap for risk-based sizing. The tester reserves 25% margin (4x ceiling), leaving headroom above this 3x exposure cap.", group = G_BT)
+bool btEnableLongs = input.bool(true, "Test longs", group = G_BT, inline = "BTDIR")
+bool btEnableShorts = input.bool(true, "Test shorts", group = G_BT, inline = "BTDIR")
+int btStartTime = input.time(timestamp("01 Jan 2022 00:00 +0000"), "Start date", group = G_BT)
+int btEndTime = input.time(timestamp("31 Dec 2035 23:59 +0000"), "End date", group = G_BT)
+
+string G_DIAG = "11. Diagnostic attribution"
+bool diagShowTable = input.bool(false, "Show setup × grade × side table", tooltip = "Counts complete plans, not individual partial exits. Open plans are excluded until fully closed. Disabled by default to keep the operational chart clean.", group = G_DIAG)
+
+// Appended v0.9 controls. The original 119 inputs above remain in their
+// original order so existing Scalp/Intraday/Swing profiles remain compatible.
+string G_VAL = "12. v0.9 Structural validation"
+int adaptiveTrendLen = input.int(20, "Adaptive trend efficiency length", minval = 5, maxval = 100, group = G_VAL)
+float adaptiveErFloor = input.float(0.15, "Adaptive ER activation", minval = 0.0, maxval = 0.9, step = 0.05, group = G_VAL)
+float adaptiveErFull = input.float(0.55, "Adaptive ER full weight", minval = 0.1, maxval = 1.0, step = 0.05, group = G_VAL)
+float adaptiveHmaMaxWeight = input.float(0.25, "Maximum adaptive HMA weight", minval = 0.0, maxval = 0.5, step = 0.05, group = G_VAL)
+float adaptiveVarianceCap = input.float(1.75, "High-variance cutoff", minval = 1.05, maxval = 4.0, step = 0.05, group = G_VAL)
+string closedContextPolicy = input.string("Technical B", "Closed US context policy", options = ["Technical B", "Degrade to C", "Exponential decay"], tooltip = "Technical B is the crypto 24/7 default: Grade A remains disabled and Grade B needs stricter technical evidence. Degrade to C blocks entries; Exponential decay freezes and discounts the last traditional context.", group = G_VAL)
+string usCashSession = input.session("0930-1600:23456", "US cash context", group = G_VAL)
+float closedContextHalfLifeHours = input.float(8.0, "Closed-context half-life (hours)", minval = 1.0, maxval = 72.0, step = 1.0, group = G_VAL)
+float closedContextMinWeight = input.float(0.25, "Minimum usable decay weight", minval = 0.05, maxval = 0.75, step = 0.05, group = G_VAL)
+string btMarketPreset = input.string("Auto", "Market preset", options = ["Auto", "Crypto spot", "Crypto perpetual", "CME futures", "CFD", "Feed metadata", "Manual"], group = G_VAL)
+float btManualValuePerPoint = input.float(1.0, "Manual value per price point", minval = 0.00000001, step = 0.01, tooltip = "Manual only. Effective point value equals this value times the manual contract multiplier.", group = G_VAL)
+float btManualContractMultiplier = input.float(1.0, "Manual contract multiplier", minval = 0.00000001, step = 0.01, group = G_VAL)
+float btDailyMaxLossPct = input.float(2.0, "Daily maximum loss (%)", minval = 0.0, maxval = 100.0, step = 0.10, tooltip = "Zero disables the lock. Once reached, new entries remain blocked until the next exchange day.", group = G_VAL)
+float btCapitalSyncTolerancePct = input.float(5.0, "Capital mismatch warning (%)", minval = 0.10, maxval = 100.0, step = 0.10, group = G_VAL)
+bool includeFundingCost = input.bool(false, "Include estimated funding", tooltip = "Funding is an estimate because Pine does not expose historical contract funding. Tester commission remains the declared 0.08% per fill.", group = G_VAL)
+float fundingPctInterval = input.float(0.0, "Funding cost per interval (%)", minval = 0.0, step = 0.001, group = G_VAL)
+int fundingIntervalHours = input.int(8, "Funding interval (hours)", minval = 1, maxval = 168, group = G_VAL)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+f_clamp(float x) =>
+    math.max(-1.0, math.min(1.0, x))
+
+f_unit(float x) =>
+    math.max(0.0, math.min(1.0, x))
+
+// Kaufman efficiency raises HMA participation only during orderly trends.
+// Low efficiency, warm-up and excess relative variance all revert to EMA.
+f_adaptive_hma_weight() =>
+    float path = ta.sma(math.abs(ta.change(close)), adaptiveTrendLen) * adaptiveTrendLen
+    float er = not na(path) and path > syminfo.mintick ? math.abs(close - close[adaptiveTrendLen]) / path : 0.0
+    float logRet = close > 0 and close[1] > 0 ? math.log(close / close[1]) : na
+    float realizedVolatility = ta.stdev(logRet, adaptiveTrendLen)
+    float baselineVolatility = ta.sma(realizedVolatility, adaptiveTrendLen * 2)
+    float varianceRatio = not na(baselineVolatility) and baselineVolatility > 0 ? realizedVolatility / baselineVolatility : na
+    float erDenominator = math.max(adaptiveErFull - adaptiveErFloor, 0.000001)
+    float efficiencyGate = f_unit((er - adaptiveErFloor) / erDenominator)
+    float varianceGate = na(varianceRatio) ? 0.0 : varianceRatio <= 1.0 ? 1.0 : f_unit((adaptiveVarianceCap - varianceRatio) / math.max(adaptiveVarianceCap - 1.0, 0.000001))
+    adaptiveHmaMaxWeight * efficiencyGate * varianceGate
+
+f_zchange(int changeLen, int zLen) =>
+    float x = close - close[changeLen]
+    float avg = ta.sma(x, zLen)
+    float dev = ta.stdev(x, zLen)
+    na(dev) or dev == 0.0 ? na : (x - avg) / dev
+
+f_zlogret(int changeLen, int zLen) =>
+    float x = close > 0 and close[changeLen] > 0 ? math.log(close / close[changeLen]) : na
+    float avg = ta.sma(x, zLen)
+    float dev = ta.stdev(x, zLen)
+    na(dev) or dev == 0.0 ? na : (x - avg) / dev
+
+f_confirmed_zchange(int changeLen, int zLen) =>
+    f_zchange(changeLen, zLen)[1]
+
+f_confirmed_zlogret(int changeLen, int zLen) =>
+    f_zlogret(changeLen, zLen)[1]
+
+f_fresh(int sourceTime, float maxAgeMs) =>
+    not na(sourceTime) and time_close >= sourceTime and time_close - sourceTime <= maxAgeMs
+
+f_trend_score() =>
+    float fastHma = ta.hma(close, fastLen)
+    float slowHma = ta.hma(close, slowLen)
+    float fastEma = ta.ema(close, fastLen)
+    float slowEma = ta.ema(close, slowLen)
+    float adaptiveWeight = f_adaptive_hma_weight()
+    float f = trendEstimator == "HMA blend" ? fastEma * (1.0 - adaptiveWeight) + fastHma * adaptiveWeight : trendEstimator == "HMA" ? fastHma : fastEma
+    float s = trendEstimator == "HMA blend" ? slowEma * (1.0 - adaptiveWeight) + slowHma * adaptiveWeight : trendEstimator == "HMA" ? slowHma : slowEma
+    float trend = (f > s ? 0.6 : -0.6) + (close > f ? 0.4 : -0.4)
+    trend[1]
+
+f_confirmed_logret_one() =>
+    close[1] > 0 and close[2] > 0 ? math.log(close[1] / close[2]) : na
+
+f_norm(float z) =>
+    na(z) ? na : f_clamp(z / 2.5)
+
+// Non-linear Z-score mapping: small moves are compressed and confirmed
+// ±threshold extremes receive full risk-on/risk-off strength.
+f_trans_z_component(float z, bool inverse) =>
+    float orientedZ = inverse ? -z : z
+    float cappedZ = math.max(-transExtremeZ, math.min(transExtremeZ, orientedZ))
+    float normalizer = 2.0 / (1.0 + math.exp(-1.25 * transExtremeZ)) - 1.0
+    na(z) or normalizer == 0 ? na : f_clamp((2.0 / (1.0 + math.exp(-1.25 * cappedZ)) - 1.0) / normalizer)
+
+f_avg2(float a, float b) =>
+    na(a) ? b : na(b) ? a : (a + b) / 2.0
+
+f_score_color(float score) =>
+    na(score) ? color.rgb(75, 79, 88) : score >= 60 ? color.rgb(0, 150, 95) : score >= 20 ? color.rgb(70, 125, 75) : score <= -60 ? color.rgb(200, 48, 65) : score <= -20 ? color.rgb(145, 74, 55) : color.rgb(85, 91, 100)
+
+f_regime(float score) =>
+    na(score) ? "N/D" : score >= 60 ? "Fuerte alcista" : score >= 20 ? "Alcista" : score <= -60 ? "Fuerte bajista" : score <= -20 ? "Bajista" : "Mixto"
+
+f_fmt(float value) =>
+    na(value) ? "N/D" : str.tostring(math.round(value))
+
+f_fmt2(float value) =>
+    na(value) ? "N/D" : str.tostring(math.round(value * 100.0) / 100.0)
+
+f_json_number(float value) =>
+    na(value) ? "null" : str.tostring(value)
+
+f_json_price(float value) =>
+    na(value) ? "null" : str.tostring(value, format.mintick)
+
+f_json_text(string value) =>
+    string noBackslash = str.replace_all(value, "\\", "/")
+    str.replace_all(noBackslash, "\"", "'")
+
+f_array_pearson(array<float> xValues, array<float> yValues) =>
+    int sampleCount = math.min(array.size(xValues), array.size(yValues))
+    float result = na
+    if sampleCount >= 3
+        float sumX = 0.0
+        float sumY = 0.0
+        float sumXX = 0.0
+        float sumYY = 0.0
+        float sumXY = 0.0
+        for sampleIndex = 0 to sampleCount - 1
+            float x = array.get(xValues, sampleIndex)
+            float y = array.get(yValues, sampleIndex)
+            sumX += x
+            sumY += y
+            sumXX += x * x
+            sumYY += y * y
+            sumXY += x * y
+        float numerator = sampleCount * sumXY - sumX * sumY
+        float denominator = math.sqrt(math.max((sampleCount * sumXX - sumX * sumX) * (sampleCount * sumYY - sumY * sumY), 0.0))
+        result := denominator > 0 ? math.max(-1.0, math.min(1.0, numerator / denominator)) : na
+    result
+
+f_grade(float score) =>
+    na(score) ? "N/D" : math.abs(score) >= 60 ? "A" : math.abs(score) >= 20 ? "B" : "C"
+
+f_transmission_state(float score) =>
+    na(score) ? "N/D" : score >= 20 ? "RISK-ON" : score <= -20 ? "RISK-OFF" : "NEUTRAL"
+
+// Order-specific metadata is inserted as a JSON object by the compiler-level
+// strategy alert template. Placeholders belong in that outer template; Pine
+// variables belong here so every possible fill has a valid payload.
+f_order_meta(string eventName, string orderSide, string signalId, string setupName, string gradeName, float requestedQty, float stopPrice, float targetPrice, float effectiveRiskPct) =>
+    "{\"schema\":\"macroflow.order.v1\",\"event\":\"" + f_json_text(eventName) + "\",\"model\":\"" + MODEL_VERSION + "\",\"experiment\":\"" + f_json_text(experimentId) + "\",\"side\":\"" + f_json_text(orderSide) + "\",\"signal_id\":\"" + f_json_text(signalId) + "\",\"setup_type\":\"" + f_json_text(setupName) + "\",\"grade\":\"" + f_json_text(gradeName) + "\",\"requested_qty\":" + f_json_number(requestedQty) + ",\"stop\":" + f_json_price(stopPrice) + ",\"target\":" + f_json_price(targetPrice) + ",\"risk_pct\":" + f_json_number(effectiveRiskPct) + ",\"configured_risk_pct\":" + f_json_number(btRiskPct) + "}"
+
+f_event_window(bool enabled, int eventTime) =>
+    int startTime = eventTime - minutesBefore * 60000
+    int endTime = eventTime + minutesAfter * 60000
+    calendarFilter and enabled and time_close >= startTime and time <= endTime
+
+// Stable diagnostic mapping. One bucket represents setup x grade x side:
+// bucket = setup_index * 4 + grade_index * 2 + side_index.
+// Grade A = 0, B = 1; LONG = 0, SHORT = 1.
+f_diag_setup_index(string setupName) =>
+    setupName == "TREND_PULLBACK" ? 0 : setupName == "EXT_FADE" ? 1 : setupName == "FALSE_BREAK" ? 2 : setupName == "RETEST" ? 3 : setupName == "BREAK" ? 4 : setupName == "ACCEPT" ? 5 : setupName == "PIVOT_BREAK" ? 6 : 7
+
+f_diag_setup_name(int setupIndex) =>
+    setupIndex == 0 ? "TREND_PULLBACK" : setupIndex == 1 ? "EXT_FADE" : setupIndex == 2 ? "FALSE_BREAK" : setupIndex == 3 ? "RETEST" : setupIndex == 4 ? "BREAK" : setupIndex == 5 ? "ACCEPT" : setupIndex == 6 ? "PIVOT_BREAK" : "OTHER"
+
+f_diag_bucket(string setupName, string gradeName, int side) =>
+    int setupIndex = f_diag_setup_index(setupName)
+    int gradeIndex = gradeName == "A" ? 0 : 1
+    int sideIndex = side == 1 ? 0 : 1
+    setupIndex * 4 + gradeIndex * 2 + sideIndex
+
+f_floor_qty(float rawQty, float qtyStep, float minimumQty) =>
+    float safeStep = math.max(qtyStep, 0.000000000001)
+    float roundedQty = math.floor(rawQty / safeStep + 0.000000001) * safeStep
+    roundedQty + safeStep * 0.000001 >= minimumQty ? roundedQty : 0.0
+
+// Standardize the main chart ID once, outside requested contexts. This avoids
+// inheriting Heikin-Ashi or other chart modifiers and keeps symbol comparisons
+// deterministic in Pine v6.
+string chartTicker = ticker.standard(syminfo.main_tickerid)
+
+// Market infrastructure is resolved from feed metadata. syminfo.pointvalue
+// already carries the economic contract multiplier on standard futures feeds;
+// multiplying it again would double-count contract value.
+string btTickerUpper = str.upper(syminfo.main_tickerid)
+string btPrefixUpper = str.upper(syminfo.prefix)
+bool btLooksPerpetual = syminfo.type == "crypto" and (str.contains(btTickerUpper, "PERP") or str.contains(btTickerUpper, "SWAP") or str.contains(btTickerUpper, ".P"))
+bool btLooksCme = syminfo.type == "futures" and (str.contains(btPrefixUpper, "CME") or str.contains(btPrefixUpper, "CBOT") or str.contains(btPrefixUpper, "COMEX") or str.contains(btPrefixUpper, "NYMEX"))
+string btDetectedPreset = switch
+    btLooksPerpetual => "Crypto perpetual"
+    syminfo.type == "crypto" => "Crypto spot"
+    btLooksCme => "CME futures"
+    syminfo.type == "cfd" => "CFD"
+    => "Feed metadata"
+string btEffectivePreset = btMarketPreset == "Auto" ? btDetectedPreset : btMarketPreset
+float btFeedMinQty = na(syminfo.mincontract) or syminfo.mincontract <= 0.0 ? btQtyStep : syminfo.mincontract
+bool btHasPointValueMetadata = not na(syminfo.pointvalue) and syminfo.pointvalue > 0.0
+float btFeedPointValue = btHasPointValueMetadata ? syminfo.pointvalue : na
+float btEffectiveQtyStep = switch btEffectivePreset
+    "CME futures" => math.max(1.0, btFeedMinQty)
+    "Manual" => math.max(btQtyStep, btFeedMinQty)
+    => btFeedMinQty
+float btValuePerPriceUnit = btEffectivePreset == "Manual" ? btManualValuePerPoint : 1.0
+float btContractMultiplier = btEffectivePreset == "Manual" ? btManualContractMultiplier : btEffectivePreset == "Crypto spot" or btEffectivePreset == "Crypto perpetual" ? nz(btFeedPointValue, 1.0) : btFeedPointValue
+float btEffectivePointValue = btValuePerPriceUnit * btContractMultiplier
+bool btPresetMismatch = btMarketPreset != "Auto" and btMarketPreset != "Manual" and btMarketPreset != "Feed metadata" and btMarketPreset != btDetectedPreset
+bool btPresetNeedsMetadata = btEffectivePreset == "CME futures" or btEffectivePreset == "CFD" or btEffectivePreset == "Feed metadata"
+bool btMetadataValid = not btPresetNeedsMetadata or btHasPointValueMetadata
+bool btInfrastructureValid = not btPresetMismatch and btMetadataValid and btEffectiveQtyStep > 0.0 and not na(btEffectivePointValue) and btEffectivePointValue > 0.0
+
+// Native equity is the sole sizing capital. The legacy input is retained only
+// as a profile-compatible audit check against Strategy Properties.
+float btEquity = math.max(strategy.equity, 0.0)
+float btCapitalMismatchPct = strategy.initial_capital > 0.0 ? math.abs(btInitialCapital - strategy.initial_capital) / strategy.initial_capital * 100.0 : 0.0
+bool btCapitalDesynchronized = btCapitalMismatchPct >= btCapitalSyncTolerancePct
+
+// Daily loss lock is latched: recovery later in the same exchange day cannot
+// re-enable entries. It resets only on the next exchange trading day.
+bool btNewExchangeDay = ta.change(time_tradingday) != 0
+var float btDayStartEquity = na
+var bool btDailyLossLocked = false
+if barstate.isfirst or (barstate.isnew and btNewExchangeDay)
+    btDayStartEquity := nz(strategy.equity[1], strategy.equity)
+    btDailyLossLocked := false
+float btDailyPnl = strategy.equity - nz(btDayStartEquity, strategy.equity)
+float btDailyLossLimitCash = nz(btDayStartEquity, strategy.equity) * btDailyMaxLossPct / 100.0
+if barstate.isconfirmed and not btDailyLossLocked and btDailyMaxLossPct > 0.0 and btDailyPnl <= -btDailyLossLimitCash
+    btDailyLossLocked := true
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fundamental regime: only slow, independent factors. Confirmed HTF data uses
+// the previous completed source bar to keep historical and real-time behavior
+// consistent. Missing series reduce coverage instead of becoming neutral zeros.
+// ─────────────────────────────────────────────────────────────────────────────
+[us02yZ, us02yTime] = request.security(us02ySymbol, macroTf, [f_confirmed_zchange(macroRocLen, macroNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[real10yZ, real10yTime] = request.security(real10ySymbol, macroTf, [f_confirmed_zchange(macroRocLen, macroNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[breakevenZ, breakevenTime] = request.security(breakevenSymbol, macroTf, [f_confirmed_zchange(macroRocLen, macroNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[oilZ, oilTime] = request.security(oilSymbol, macroTf, [f_confirmed_zlogret(macroRocLen, macroNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[nfciZ, nfciTime] = request.security(nfciSymbol, "W", [f_confirmed_zchange(1, 52), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+
+float macroDailyMaxAgeMs = 5.0 * 86400000.0
+float macroWeeklyMaxAgeMs = 14.0 * 86400000.0
+bool us02yValid = not na(us02yZ) and f_fresh(us02yTime, macroDailyMaxAgeMs)
+bool real10yValid = not na(real10yZ) and f_fresh(real10yTime, macroDailyMaxAgeMs)
+bool breakevenValid = not na(breakevenZ) and f_fresh(breakevenTime, macroDailyMaxAgeMs)
+bool oilValid = not na(oilZ) and f_fresh(oilTime, macroDailyMaxAgeMs)
+bool nfciValid = not na(nfciZ) and f_fresh(nfciTime, macroWeeklyMaxAgeMs)
+
+bool chartIsOil = chartTicker == ticker.standard(oilSymbol)
+bool oilIndependent = oilValid and not chartIsOil
+float ratesQuality = (us02yValid ? 0.5 : 0.0) + (real10yValid ? 0.5 : 0.0)
+float inflationQuality = includeOilInInflation ? (breakevenValid ? 0.5 : 0.0) + (oilIndependent ? 0.5 : 0.0) : (breakevenValid ? 1.0 : 0.0)
+float conditionsQuality = nfciValid ? 1.0 : 0.0
+float ratesFactor = f_avg2(us02yValid ? -f_norm(us02yZ) : na, real10yValid ? -f_norm(real10yZ) : na)
+float inflationFactor = includeOilInInflation ? f_avg2(breakevenValid ? -f_norm(breakevenZ) : na, oilIndependent ? -f_norm(oilZ) : na) : breakevenValid ? -f_norm(breakevenZ) : na
+float conditionsFactor = nfciValid ? -f_norm(nfciZ) : na
+float fundamentalNum = 0.0
+float fundamentalDen = 0.0
+if not na(ratesFactor) and ratesQuality > 0
+    fundamentalNum += ratesFactor * 40.0 * ratesQuality
+    fundamentalDen += 40.0 * ratesQuality
+if not na(inflationFactor) and inflationQuality > 0
+    fundamentalNum += inflationFactor * 30.0 * inflationQuality
+    fundamentalDen += 30.0 * inflationQuality
+if not na(conditionsFactor) and conditionsQuality > 0
+    fundamentalNum += conditionsFactor * 30.0 * conditionsQuality
+    fundamentalDen += 30.0 * conditionsQuality
+float fundamentalCoverage = fundamentalDen
+float fundamentalScore = fundamentalDen >= 60.0 ? 100.0 * fundamentalNum / fundamentalDen : na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cross-asset transmission. Each family is counted once to limit correlation.
+// ─────────────────────────────────────────────────────────────────────────────
+[spyZ, spyTime] = request.security(spySymbol, transTf, [f_confirmed_zlogret(transRocLen, transNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[qqqZ, qqqTime] = request.security(qqqSymbol, transTf, [f_confirmed_zlogret(transRocLen, transNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[vixZ, vixTime] = request.security(vixSymbol, transTf, [f_confirmed_zlogret(transRocLen, transNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[dxyZ, dxyTime] = request.security(dxySymbol, transTf, [f_confirmed_zlogret(transRocLen, transNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[hygZ, hygTime] = request.security(hygSymbol, transTf, [f_confirmed_zlogret(transRocLen, transNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[iefZ, iefTime] = request.security(iefSymbol, transTf, [f_confirmed_zlogret(transRocLen, transNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[rspZ, rspTime] = request.security(rspSymbol, transTf, [f_confirmed_zlogret(transRocLen, transNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[smhZ, smhTime] = request.security(smhSymbol, transTf, [f_confirmed_zlogret(transRocLen, transNormLen), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[corrAssetReturn, corrAssetTime] = request.security(chartTicker, correlationTf, [f_confirmed_logret_one(), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+[corrSpyReturn, corrSpyTime] = request.security(spySymbol, correlationTf, [f_confirmed_logret_one(), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[corrVixReturn, corrVixTime] = request.security(vixSymbol, correlationTf, [f_confirmed_logret_one(), time_close[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+
+string gateMode = mode == "Custom" ? customGateMode : mode
+float transTfMs = timeframe.in_seconds(transTf) * 1000.0
+float transLiveMaxAgeMs = math.max(maxLiveTransmissionMinutes * 60000.0, transTfMs)
+float transContextMaxAgeMs = gateMode == "Swing" ? 5.0 * 86400000.0 : 3.0 * 86400000.0
+bool spyValid = not na(spyZ) and f_fresh(spyTime, transContextMaxAgeMs)
+bool qqqValid = not na(qqqZ) and f_fresh(qqqTime, transContextMaxAgeMs)
+bool vixValid = not na(vixZ) and f_fresh(vixTime, transContextMaxAgeMs)
+bool dxyValid = not na(dxyZ) and f_fresh(dxyTime, transContextMaxAgeMs)
+bool hygValid = not na(hygZ) and f_fresh(hygTime, transContextMaxAgeMs)
+bool iefValid = not na(iefZ) and f_fresh(iefTime, transContextMaxAgeMs)
+bool rspValid = not na(rspZ) and f_fresh(rspTime, transContextMaxAgeMs)
+bool smhValid = not na(smhZ) and f_fresh(smhTime, transContextMaxAgeMs)
+
+bool chartIsSpy = chartTicker == ticker.standard(spySymbol)
+bool chartIsQqq = chartTicker == ticker.standard(qqqSymbol)
+bool chartIsVix = chartTicker == ticker.standard(vixSymbol)
+float broadMarket = chartIsSpy ? (qqqValid ? f_trans_z_component(qqqZ, false) : na) : chartIsQqq ? (spyValid ? f_trans_z_component(spyZ, false) : na) : f_avg2(spyValid ? f_trans_z_component(spyZ, false) : na, qqqValid ? f_trans_z_component(qqqZ, false) : na)
+float broadQuality = chartIsSpy ? (qqqValid ? 1.0 : 0.0) : chartIsQqq ? (spyValid ? 1.0 : 0.0) : (spyValid ? 0.5 : 0.0) + (qqqValid ? 0.5 : 0.0)
+float stressPulse = vixValid ? f_trans_z_component(vixZ, true) : na
+float dollarPulse = dxyValid ? f_trans_z_component(dxyZ, true) : na
+// These are explicitly momentum-relative proxies, not exact price-ratio returns.
+float creditPulse = not hygValid or not iefValid ? na : f_clamp((f_trans_z_component(hygZ, false) - f_trans_z_component(iefZ, false)) / 2.0)
+float breadthBase = profile == "US indices" ? (smhValid ? f_trans_z_component(smhZ, false) : na) : (rspValid ? f_trans_z_component(rspZ, false) : na)
+float breadthCompare = spyValid ? f_trans_z_component(spyZ, false) : na
+float breadthPulse = na(breadthBase) or na(breadthCompare) ? na : f_clamp((breadthBase - breadthCompare) / 2.0)
+float transNum = 0.0
+float transDen = 0.0
+if not na(broadMarket) and broadQuality > 0
+    transNum += broadMarket * 30.0 * broadQuality
+    transDen += 30.0 * broadQuality
+if not na(stressPulse)
+    transNum += stressPulse * 20.0
+    transDen += 20.0
+if not na(creditPulse)
+    transNum += creditPulse * 20.0
+    transDen += 20.0
+if not na(dollarPulse)
+    transNum += dollarPulse * 15.0
+    transDen += 15.0
+if not na(breadthPulse)
+    transNum += breadthPulse * 15.0
+    transDen += 15.0
+float transmissionCoverage = transDen
+float transmissionScore = transDen >= 60.0 ? 100.0 * transNum / transDen : na
+
+float liveBroadQuality = chartIsSpy ? (qqqValid and f_fresh(qqqTime, transLiveMaxAgeMs) ? 1.0 : 0.0) : chartIsQqq ? (spyValid and f_fresh(spyTime, transLiveMaxAgeMs) ? 1.0 : 0.0) : (spyValid and f_fresh(spyTime, transLiveMaxAgeMs) ? 0.5 : 0.0) + (qqqValid and f_fresh(qqqTime, transLiveMaxAgeMs) ? 0.5 : 0.0)
+float transmissionFreshCoverage = liveBroadQuality * 30.0 + (vixValid and f_fresh(vixTime, transLiveMaxAgeMs) ? 20.0 : 0.0) + (hygValid and iefValid and f_fresh(hygTime, transLiveMaxAgeMs) and f_fresh(iefTime, transLiveMaxAgeMs) ? 20.0 : 0.0) + (dxyValid and f_fresh(dxyTime, transLiveMaxAgeMs) ? 15.0 : 0.0) + ((profile == "US indices" ? smhValid and f_fresh(smhTime, transLiveMaxAgeMs) : rspValid and f_fresh(rspTime, transLiveMaxAgeMs)) and spyValid and f_fresh(spyTime, transLiveMaxAgeMs) ? 15.0 : 0.0)
+bool transmissionLive = transmissionFreshCoverage >= 70.0
+bool transmissionContextOnly = not transmissionLive and not na(transmissionScore)
+
+// Pearson gate on nearest-time, confirmed returns. Arrays admit each reference
+// HTF observation exactly once. One source interval of tolerance accommodates
+// session-offset closes (for example, crypto :00 versus SPY :30) without ever
+// reusing a stale reference observation.
+bool correlationTfValid = timeframe.in_seconds(correlationTf) >= timeframe.in_seconds(timeframe.period)
+bool useVixCorrelation = correlationReference == "VIX" ? not chartIsVix : chartIsSpy
+float correlationReferenceReturn = useVixCorrelation ? corrVixReturn : corrSpyReturn
+int correlationReferenceTime = useVixCorrelation ? corrVixTime : corrSpyTime
+string effectiveCorrelationReference = useVixCorrelation ? "VIX" : "SPY"
+var array<float> correlationAssetSamples = array.new_float()
+var array<float> correlationReferenceSamples = array.new_float()
+var int lastCorrelationPairTime = na
+float correlationPairToleranceMs = timeframe.in_seconds(correlationTf) * 1000.0
+bool correlationPairObserved = barstate.isconfirmed and correlationTfValid and not na(corrAssetReturn) and not na(correlationReferenceReturn) and not na(corrAssetTime) and not na(correlationReferenceTime) and math.abs(corrAssetTime - correlationReferenceTime) <= correlationPairToleranceMs and (na(lastCorrelationPairTime) or correlationReferenceTime > lastCorrelationPairTime)
+if correlationPairObserved
+    array.push(correlationAssetSamples, corrAssetReturn)
+    array.push(correlationReferenceSamples, correlationReferenceReturn)
+    if array.size(correlationAssetSamples) > correlationLookback
+        array.shift(correlationAssetSamples)
+        array.shift(correlationReferenceSamples)
+    lastCorrelationPairTime := correlationReferenceTime
+int correlationSampleCount = math.min(array.size(correlationAssetSamples), array.size(correlationReferenceSamples))
+float rawPearsonCorrelation = f_array_pearson(correlationAssetSamples, correlationReferenceSamples)
+float boundedAbsCorrelation = not na(rawPearsonCorrelation) ? math.min(math.abs(rawPearsonCorrelation), 0.999999) : na
+float correlationDenominator = not na(boundedAbsCorrelation) ? math.max(1.0 - boundedAbsCorrelation * boundedAbsCorrelation, 0.000001) : na
+float correlationTStat = not na(boundedAbsCorrelation) and correlationSampleCount >= 3 ? boundedAbsCorrelation * math.sqrt((correlationSampleCount - 2.0) / correlationDenominator) : na
+float correlationMaxAgeMs = math.max(transContextMaxAgeMs, timeframe.in_seconds(correlationTf) * 1000.0)
+float riskOrientedCorrelation = effectiveCorrelationReference == "VIX" ? -rawPearsonCorrelation : rawPearsonCorrelation
+bool correlationFresh = f_fresh(lastCorrelationPairTime, correlationMaxAgeMs)
+bool correlationMagnitudeValid = not na(rawPearsonCorrelation) and math.abs(rawPearsonCorrelation) >= minAbsCorrelation
+bool correlationWindowValid = correlationTfValid and correlationSampleCount >= correlationLookback and correlationMagnitudeValid and not na(correlationTStat) and correlationTStat >= minCorrelationTStat
+// Contextual A/B needs two significant windows with the same sign among the
+// last three. Closed-session crypto Technical B displays this as observation.
+// Recording only new confirmed reference timestamps prevents repeated samples.
+var array<int> correlationWindowStates = array.new_int()
+if correlationPairObserved and correlationSampleCount >= correlationLookback
+    int correlationWindowState = correlationWindowValid ? (rawPearsonCorrelation >= 0.0 ? 1 : -1) : 0
+    array.push(correlationWindowStates, correlationWindowState)
+    if array.size(correlationWindowStates) > 3
+        array.shift(correlationWindowStates)
+int correlationWindowsStored = array.size(correlationWindowStates)
+int correlationState0 = correlationWindowsStored == 3 ? array.get(correlationWindowStates, 0) : 0
+int correlationState1 = correlationWindowsStored == 3 ? array.get(correlationWindowStates, 1) : 0
+int correlationState2 = correlationWindowsStored == 3 ? array.get(correlationWindowStates, 2) : 0
+int correlationPositiveWindows = (correlationState0 == 1 ? 1 : 0) + (correlationState1 == 1 ? 1 : 0) + (correlationState2 == 1 ? 1 : 0)
+int correlationNegativeWindows = (correlationState0 == -1 ? 1 : 0) + (correlationState1 == -1 ? 1 : 0) + (correlationState2 == -1 ? 1 : 0)
+int correlationValidWindows = correlationPositiveWindows + correlationNegativeWindows
+int correlationConsensusCount = math.max(correlationPositiveWindows, correlationNegativeWindows)
+int correlationConsensusSign = correlationPositiveWindows >= 2 ? 1 : correlationNegativeWindows >= 2 ? -1 : 0
+bool correlationConsistencyReady = correlationWindowsStored == 3
+bool correlationStatValid = correlationTfValid and correlationFresh and correlationConsistencyReady and correlationConsensusSign != 0
+bool correlationGateValid = not requireCorrelationEvidence or correlationStatValid
+float correlationRiskOrientation = effectiveCorrelationReference == "VIX" ? -float(correlationConsensusSign) : float(correlationConsensusSign)
+// Orient transmission only after the 2-of-3 test passes. Raw score and raw r
+// remain available independently for audit and webhook reconciliation.
+float assetTransmissionScore = requireCorrelationEvidence and correlationStatValid ? transmissionScore * correlationRiskOrientation : transmissionScore
+
+// The US clock handles weekends/DST, while SPY freshness catches holidays and
+// extraordinary closures. Crypto can either block, decay the last traditional
+// context, or run a stricter technical-only Grade B profile. Grade A always
+// remains dependent on live traditional-market context.
+bool chartIsCrypto = syminfo.type == "crypto"
+bool usCashClockOpen = not na(time(timeframe.period, usCashSession, "America/New_York"))
+bool spyCashFeedFresh = f_fresh(spyTime, transLiveMaxAgeMs)
+bool traditionalContextOpen = usCashClockOpen and spyCashFeedFresh
+// A stale SPY feed during the scheduled cash session is ambiguous: it may be a
+// holiday or a feed failure. Fail closed instead of silently enabling the
+// technical-only route. Technical B is reserved for clock-confirmed closures.
+bool cryptoOutsideUsCash = chartIsCrypto and not usCashClockOpen
+bool cryptoCashFeedStale = chartIsCrypto and usCashClockOpen and not spyCashFeedFresh
+bool cryptoTraditionalClosed = cryptoOutsideUsCash
+float closedContextAgeHours = not na(spyTime) ? math.max(time_close - spyTime, 0) / 3600000.0 : na
+float closedContextDecay = not na(closedContextAgeHours) ? math.exp(-math.log(2.0) * closedContextAgeHours / closedContextHalfLifeHours) : 0.0
+bool useClosedDecay = cryptoTraditionalClosed and closedContextPolicy == "Exponential decay"
+bool useClosedTechnical = cryptoTraditionalClosed and closedContextPolicy == "Technical B"
+// Stale SPY/VIX/DXY direction is not scored under Technical B. Pearson remains
+// visible for audit but does not gate a 24/7 crypto entry.
+float validatedTransmissionScore = useClosedDecay ? assetTransmissionScore * closedContextDecay : useClosedTechnical ? na : assetTransmissionScore
+bool closedContextGradeAllowed = not cryptoTraditionalClosed or useClosedTechnical or (useClosedDecay and closedContextDecay >= closedContextMinWeight)
+bool closedContextHardBlock = cryptoCashFeedStale or (cryptoTraditionalClosed and closedContextPolicy == "Degrade to C")
+string traditionalContextState = traditionalContextOpen ? "ABIERTO" : not chartIsCrypto ? "N/A" : cryptoCashFeedStale ? "FEED SPY N/D → C" : useClosedTechnical ? "CERRADO · B TÉCNICO" : useClosedDecay ? "DECAY " + f_fmt2(closedContextDecay) : "CERRADO → C"
+
+int transmissionRiskOnExtremes = (spyValid and spyZ >= transExtremeZ ? 1 : 0) + (vixValid and vixZ <= -transExtremeZ ? 1 : 0) + (dxyValid and dxyZ <= -transExtremeZ ? 1 : 0)
+int transmissionRiskOffExtremes = (spyValid and spyZ <= -transExtremeZ ? 1 : 0) + (vixValid and vixZ >= transExtremeZ ? 1 : 0) + (dxyValid and dxyZ >= transExtremeZ ? 1 : 0)
+int transmissionExtremeVote = transmissionRiskOnExtremes - transmissionRiskOffExtremes
+string transmissionExtremeState = transmissionRiskOnExtremes > 0 and transmissionRiskOffExtremes > 0 ? "EXTREMO CONFLICTO" : transmissionRiskOnExtremes > 0 ? "EXTREMO RISK-ON " + str.tostring(transmissionRiskOnExtremes) + "/3" : transmissionRiskOffExtremes > 0 ? "EXTREMO RISK-OFF " + str.tostring(transmissionRiskOffExtremes) + "/3" : "Z NORMAL"
+
+float pricePressureState = na(inflationFactor) ? na : -inflationFactor
+float riskSupportState = na(broadMarket) ? na : broadMarket
+string shockProxy = na(pricePressureState) or na(riskSupportState) ? "N/D" : pricePressureState > 0.25 and riskSupportState > 0.20 ? "Precios ↑ / riesgo ↑" : pricePressureState > 0.25 and riskSupportState < -0.20 ? "Precios ↑ / riesgo ↓" : pricePressureState < -0.25 and riskSupportState < -0.20 ? "Precios ↓ / riesgo ↓" : pricePressureState < -0.25 and riskSupportState > 0.20 ? "Precios ↓ / riesgo ↑" : "Mixto"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Microstructure: opening range, anchored VWAP, confirmed pivots, trend,
+// candle efficiency and relative volume.
+// ─────────────────────────────────────────────────────────────────────────────
+float atr = ta.atr(atrLen)
+// EMA is the validated baseline. The optional blend uses 0..25% HMA according
+// to confirmed Kaufman efficiency and a high-variance penalty.
+float fastHma = ta.hma(close, fastLen)
+float slowHma = ta.hma(close, slowLen)
+float fastEma = ta.ema(close, fastLen)
+float slowEma = ta.ema(close, slowLen)
+float emaLong = ta.ema(close, longTrendLen)
+float adaptiveHmaWeight = f_adaptive_hma_weight()
+float emaFast = trendEstimator == "HMA blend" ? fastEma * (1.0 - adaptiveHmaWeight) + fastHma * adaptiveHmaWeight : trendEstimator == "HMA" ? fastHma : fastEma
+float emaSlow = trendEstimator == "HMA blend" ? slowEma * (1.0 - adaptiveHmaWeight) + slowHma * adaptiveHmaWeight : trendEstimator == "HMA" ? slowHma : slowEma
+// EMA200 stays the absolute overextension anchor under every experiment.
+float trendLongBasis = emaLong
+float rsiValue = ta.rsi(close, rsiLen)
+float sessionVwap = ta.vwap(hlc3)
+float setupDistanceAtr = atr > 0 ? (close - emaSlow) / atr : na
+float longTrendDistanceAtr = atr > 0 ? (close - emaLong) / atr : na
+float emaLongResidual = close - emaLong
+float emaLongResidualDev = ta.stdev(emaLongResidual, longTrendLen)
+float extensionBandDistance = math.max(atr * farMaAtr, emaLongResidualDev * extensionStdevMult)
+float extensionUpperBand = emaLong + extensionBandDistance
+float extensionLowerBand = emaLong - extensionBandDistance
+float recentLow3 = ta.lowest(low, 3)
+float recentHigh3 = ta.highest(high, 3)
+float pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+float pivotLow = ta.pivotlow(low, pivotLen, pivotLen)
+float lastPivotHigh = ta.valuewhen(not na(pivotHigh), pivotHigh, 0)
+float lastPivotLow = ta.valuewhen(not na(pivotLow), pivotLow, 0)
+float prevPivotHigh = ta.valuewhen(not na(pivotHigh), pivotHigh, 1)
+float prevPivotLow = ta.valuewhen(not na(pivotLow), pivotLow, 1)
+// Confirmed regular RSI divergence. The pivot is only usable after pivotLen
+// right-hand bars, so no signal is back-plotted to the original turning bar.
+bool pivotLowEvent = not na(pivotLow)
+bool pivotHighEvent = not na(pivotHigh)
+float pivotLowRsi = rsiValue[pivotLen]
+float pivotHighRsi = rsiValue[pivotLen]
+float previousDivLowPrice = ta.valuewhen(pivotLowEvent, pivotLow, 1)
+float previousDivHighPrice = ta.valuewhen(pivotHighEvent, pivotHigh, 1)
+float previousDivLowRsi = ta.valuewhen(pivotLowEvent, pivotLowRsi, 1)
+float previousDivHighRsi = ta.valuewhen(pivotHighEvent, pivotHighRsi, 1)
+int previousDivLowBar = ta.valuewhen(pivotLowEvent, bar_index - pivotLen, 1)
+int previousDivHighBar = ta.valuewhen(pivotHighEvent, bar_index - pivotLen, 1)
+int currentDivPivotBar = bar_index - pivotLen
+float pivotAtr = atr[pivotLen]
+float pivotLongBasis = emaLong[pivotLen]
+float pivotResidualDev = emaLongResidualDev[pivotLen]
+float pivotExtensionDistance = math.max(pivotAtr * farMaAtr, pivotResidualDev * extensionStdevMult)
+bool bullishPivotExhausted = pivotLowEvent and pivotAtr > 0 and pivotLow <= pivotLongBasis - pivotExtensionDistance
+bool bearishPivotExhausted = pivotHighEvent and pivotAtr > 0 and pivotHigh >= pivotLongBasis + pivotExtensionDistance
+bool bullishRsiDivergence = pivotLowEvent and not na(previousDivLowPrice) and not na(previousDivLowRsi) and not na(previousDivLowBar) and currentDivPivotBar - previousDivLowBar >= pivotLen + 1 and currentDivPivotBar - previousDivLowBar <= divergenceMaxBars and pivotLow < previousDivLowPrice and pivotLowRsi > previousDivLowRsi and math.min(pivotLowRsi, previousDivLowRsi) <= rsiOversold
+bool bearishRsiDivergence = pivotHighEvent and not na(previousDivHighPrice) and not na(previousDivHighRsi) and not na(previousDivHighBar) and currentDivPivotBar - previousDivHighBar >= pivotLen + 1 and currentDivPivotBar - previousDivHighBar <= divergenceMaxBars and pivotHigh > previousDivHighPrice and pivotHighRsi < previousDivHighRsi and math.max(pivotHighRsi, previousDivHighRsi) >= rsiOverbought
+bool newBullishFadeSeed = bullishRsiDivergence and bullishPivotExhausted
+bool newBearishFadeSeed = bearishRsiDivergence and bearishPivotExhausted
+int barsSinceBullishFadeSeed = ta.barssince(newBullishFadeSeed)
+int barsSinceBearishFadeSeed = ta.barssince(newBearishFadeSeed)
+int divergenceSignalWindow = pivotLen + 2
+bool bullishFadeArmed = not na(barsSinceBullishFadeSeed) and barsSinceBullishFadeSeed <= divergenceSignalWindow
+bool bearishFadeArmed = not na(barsSinceBearishFadeSeed) and barsSinceBearishFadeSeed <= divergenceSignalWindow
+float lastBullishFadePivot = ta.valuewhen(newBullishFadeSeed, pivotLow, 0)
+float lastBearishFadePivot = ta.valuewhen(newBearishFadeSeed, pivotHigh, 0)
+float lastBullishFadeRsi = ta.valuewhen(newBullishFadeSeed, pivotLowRsi, 0)
+float lastBearishFadeRsi = ta.valuewhen(newBearishFadeSeed, pivotHighRsi, 0)
+int lastBullishFadeTime = ta.valuewhen(newBullishFadeSeed, time_close[pivotLen], 0)
+int lastBearishFadeTime = ta.valuewhen(newBearishFadeSeed, time_close[pivotLen], 0)
+float volumeAverage = ta.sma(volume, volLen)
+bool volumeValid = not na(volume) and not na(volumeAverage) and volumeAverage > 0
+float relVolume = volumeValid ? volume / volumeAverage : na
+float volumeQuality = volumeValid ? math.max(0.70, math.min(1.20, relVolume)) : 0.85
+bool breakoutVolumePass = volumeValid ? relVolume >= minRelVolume : not requireVolumeEvidence
+float candleRange = math.max(high - low, syminfo.mintick)
+float bodyEfficiency = math.abs(close - open) / candleRange
+float closeLocation = (2.0 * close - high - low) / candleRange
+
+string orSession = orHours + ":" + orDays
+// A 30-minute opening range cannot be reconstructed faithfully from bars that
+// are themselves 30 minutes or larger. In those charts the box is disabled and
+// the confirmed-pivot setups remain available.
+bool openingTfValid = timeframe.isintraday and timeframe.in_seconds(timeframe.period) < 30 * 60
+bool inOpeningRange = useOpeningRange and openingTfValid and not na(time(timeframe.period, orSession, orTimezone))
+bool openingStart = inOpeningRange and not inOpeningRange[1]
+bool openingEnd = not inOpeningRange and inOpeningRange[1]
+var float openingHigh = na
+var float openingLow = na
+var float openingAtr = na
+var int openingCompletedTime = na
+var int openingDirection = 0
+var int breakoutBar = na
+var int breakoutTime = na
+var float breakoutVolume = na
+var bool breakoutQualified = false
+if openingStart
+    openingHigh := high
+    openingLow := low
+    openingAtr := na
+    openingCompletedTime := na
+    openingDirection := 0
+    breakoutBar := na
+    breakoutTime := na
+    breakoutVolume := na
+    breakoutQualified := false
+else if inOpeningRange
+    openingHigh := math.max(nz(openingHigh, high), high)
+    openingLow := math.min(nz(openingLow, low), low)
+if openingEnd
+    openingAtr := atr[1]
+    openingCompletedTime := time_close[1]
+
+var float anchoredPV = na
+var float anchoredVolume = na
+if openingStart
+    anchoredPV := volumeValid ? hlc3 * volume : na
+    anchoredVolume := volumeValid ? volume : na
+else if volumeValid and (inOpeningRange or not na(openingCompletedTime))
+    if na(anchoredPV) or na(anchoredVolume)
+        anchoredPV := hlc3 * volume
+        anchoredVolume := volume
+    else
+        anchoredPV += hlc3 * volume
+        anchoredVolume += volume
+float anchoredVwap = volumeValid and not na(anchoredVolume) and anchoredVolume > 0 ? anchoredPV / anchoredVolume : na
+
+bool openingFresh = not na(openingCompletedTime) and time_close >= openingCompletedTime and time_close - openingCompletedTime <= maxOpeningAgeMinutes * 60000
+float operativeVwap = openingFresh and not na(anchoredVwap) ? anchoredVwap : sessionVwap
+bool openingReady = useOpeningRange and openingTfValid and not inOpeningRange and openingFresh and not na(openingHigh) and not na(openingLow)
+float breakBuffer = math.max(2.0 * syminfo.mintick, atr * breakoutBufferAtr)
+float retestTolerance = math.max(2.0 * syminfo.mintick, atr * retestToleranceAtr)
+float retestMaxPenetration = math.max(retestTolerance, atr * retestMaxPenetrationAtr)
+bool outsideLong = openingReady and close > openingHigh
+bool outsideShort = openingReady and close < openingLow
+bool rawBreakLong = outsideLong and not outsideLong[1]
+bool rawBreakShort = outsideShort and not outsideShort[1]
+bool efficientLongBreak = rawBreakLong and close > openingHigh + breakBuffer and bodyEfficiency >= minBodyEfficiency and closeLocation > 0.40 and breakoutVolumePass and close - openingHigh <= atr * maxChaseAtr
+bool efficientShortBreak = rawBreakShort and close < openingLow - breakBuffer and bodyEfficiency >= minBodyEfficiency and closeLocation < -0.40 and breakoutVolumePass and openingLow - close <= atr * maxChaseAtr
+// Acceptance/retest may start from a slightly softer bar than an immediate
+// BREAK entry, but never from a low-volume/doji leak outside the box.
+bool qualifiedLongSeed = rawBreakLong and close > openingHigh + breakBuffer * 0.50 and bodyEfficiency >= minBodyEfficiency * 0.75 and closeLocation > 0.20 and breakoutVolumePass and close - openingHigh <= atr * maxChaseAtr * 1.50
+bool qualifiedShortSeed = rawBreakShort and close < openingLow - breakBuffer * 0.50 and bodyEfficiency >= minBodyEfficiency * 0.75 and closeLocation < -0.20 and breakoutVolumePass and openingLow - close <= atr * maxChaseAtr * 1.50
+if barstate.isconfirmed and rawBreakLong
+    openingDirection := 1
+    breakoutBar := bar_index
+    breakoutTime := time_close
+    breakoutVolume := relVolume
+    breakoutQualified := qualifiedLongSeed
+if barstate.isconfirmed and rawBreakShort
+    openingDirection := -1
+    breakoutBar := bar_index
+    breakoutTime := time_close
+    breakoutVolume := relVolume
+    breakoutQualified := qualifiedShortSeed
+
+bool retestLong = breakoutQualified and openingDirection == 1 and not na(breakoutBar) and bar_index > breakoutBar and bar_index - breakoutBar <= retestBars and low <= openingHigh + retestTolerance and low >= openingHigh - retestMaxPenetration and close > openingHigh and close > open
+bool retestShort = breakoutQualified and openingDirection == -1 and not na(breakoutBar) and bar_index > breakoutBar and bar_index - breakoutBar <= retestBars and high >= openingLow - retestTolerance and high <= openingLow + retestMaxPenetration and close < openingLow and close < open
+float falseBreakMinRelVolume = math.max(1.0, minRelVolume * 0.80)
+bool falseBreakVolumePass = not requireVolumeEvidence or (volumeValid and relVolume >= falseBreakMinRelVolume)
+bool rawFalseBreakLong = openingReady and low < openingLow - breakBuffer and close > openingLow + retestTolerance and close > open and closeLocation > 0.35 and falseBreakVolumePass
+bool rawFalseBreakShort = openingReady and high > openingHigh + breakBuffer and close < openingHigh - retestTolerance and close < open and closeLocation < -0.35 and falseBreakVolumePass
+bool dualFalseBreak = rawFalseBreakLong and rawFalseBreakShort
+bool falseBreakLong = rawFalseBreakLong and not dualFalseBreak
+bool falseBreakShort = rawFalseBreakShort and not dualFalseBreak
+bool acceptLong = breakoutQualified and openingDirection == 1 and not na(breakoutBar) and bar_index == breakoutBar + 1 and outsideLong and outsideLong[1]
+bool acceptShort = breakoutQualified and openingDirection == -1 and not na(breakoutBar) and bar_index == breakoutBar + 1 and outsideShort and outsideShort[1]
+if barstate.isconfirmed and openingDirection == 1 and openingReady and close < openingLow
+    openingDirection := 0
+    breakoutBar := na
+    breakoutTime := na
+    breakoutVolume := na
+    breakoutQualified := false
+if barstate.isconfirmed and openingDirection == -1 and openingReady and close > openingHigh
+    openingDirection := 0
+    breakoutBar := na
+    breakoutTime := na
+    breakoutVolume := na
+    breakoutQualified := false
+if barstate.isconfirmed and not na(breakoutBar) and bar_index - breakoutBar > retestBars
+    openingDirection := 0
+    breakoutBar := na
+    breakoutTime := na
+    breakoutVolume := na
+    breakoutQualified := false
+
+float openingWidthAtr = openingReady and openingAtr > 0 ? (openingHigh - openingLow) / openingAtr : na
+float openingQuality = na(openingWidthAtr) ? 0.50 : openingWidthAtr >= 0.40 and openingWidthAtr <= 1.50 ? 1.0 : openingWidthAtr >= 0.20 and openingWidthAtr <= 2.0 ? 0.70 : 0.35
+float openingComponent = falseBreakLong ? 1.0 : falseBreakShort ? -1.0 : retestLong ? 1.0 : retestShort ? -1.0 : efficientLongBreak ? 0.85 : efficientShortBreak ? -0.85 : acceptLong ? 0.55 : acceptShort ? -0.55 : openingReady and close > openingHigh ? 0.35 : openingReady and close < openingLow ? -0.35 : 0.0
+
+float localStructure = f_clamp((emaFast > emaSlow ? 0.60 : -0.60) + (close > emaFast ? 0.40 : -0.40))
+float valueComponent = na(operativeVwap) ? na : f_clamp((close > operativeVwap ? 0.60 : -0.60) + (operativeVwap > operativeVwap[3] ? 0.40 : -0.40))
+bool pivotEvidenceReady = not na(lastPivotHigh) and not na(lastPivotLow) and not na(prevPivotHigh) and not na(prevPivotLow)
+bool bullishPivotStructure = pivotEvidenceReady and lastPivotHigh > prevPivotHigh and lastPivotLow > prevPivotLow
+bool bearishPivotStructure = pivotEvidenceReady and lastPivotHigh < prevPivotHigh and lastPivotLow < prevPivotLow
+float pivotComponent = not pivotEvidenceReady ? na : close > lastPivotHigh ? 1.0 : close < lastPivotLow ? -1.0 : bullishPivotStructure ? 0.45 : bearishPivotStructure ? -0.45 : 0.0
+float impulseComponent = f_clamp(0.60 * f_clamp((close - open) / math.max(atr * 0.50, syminfo.mintick)) + 0.40 * f_clamp(closeLocation))
+
+// f_trend_score() returns the previous source bar. Combined with lookahead_on,
+// every MTF value is confirmed and identical across historical/realtime runs.
+float mtfScore1 = request.security(chartTicker, mtf1, f_trend_score(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+float mtfScore2 = request.security(chartTicker, mtf2, f_trend_score(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+float mtfScore3 = request.security(chartTicker, mtf3, f_trend_score(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+float mtfNum = (na(mtfScore1) ? 0.0 : mtfScore1) + (na(mtfScore2) ? 0.0 : mtfScore2) + (na(mtfScore3) ? 0.0 : mtfScore3)
+float mtfDen = (na(mtfScore1) ? 0.0 : 1.0) + (na(mtfScore2) ? 0.0 : 1.0) + (na(mtfScore3) ? 0.0 : 1.0)
+float mtfAlignment = mtfDen >= 2.0 ? 100.0 * mtfNum / mtfDen : na
+float mtfCoverage = 100.0 * mtfDen / 3.0
+bool transTfValid = timeframe.in_seconds(transTf) >= timeframe.in_seconds(timeframe.period)
+bool macroTfValid = timeframe.in_seconds(macroTf) >= timeframe.in_seconds(timeframe.period)
+bool mtfTfValid = timeframe.in_seconds(mtf1) >= timeframe.in_seconds(timeframe.period) and timeframe.in_seconds(mtf2) >= timeframe.in_seconds(timeframe.period) and timeframe.in_seconds(mtf3) >= timeframe.in_seconds(timeframe.period)
+float structureComponent = not mtfTfValid or na(mtfAlignment) ? localStructure : f_clamp(0.70 * localStructure + 0.30 * mtfAlignment / 100.0)
+
+int longFastMtfVotes = (not na(mtfScore1) and mtfScore1 > 0 ? 1 : 0) + (not na(mtfScore2) and mtfScore2 > 0 ? 1 : 0)
+int shortFastMtfVotes = (not na(mtfScore1) and mtfScore1 < 0 ? 1 : 0) + (not na(mtfScore2) and mtfScore2 < 0 ? 1 : 0)
+bool longSlowMtf = not na(mtfScore3) and mtfScore3 > 0
+bool shortSlowMtf = not na(mtfScore3) and mtfScore3 < 0
+bool longStrictMtf = mtfTfValid and longFastMtfVotes == 2 and longSlowMtf
+bool shortStrictMtf = mtfTfValid and shortFastMtfVotes == 2 and shortSlowMtf
+
+// Causal three-candle void: it is known only at the current close, and is
+// consumed on the first later overlap. It is a bonus/zone, never a hard gate.
+bool newBullVoid = barstate.isconfirmed and low > high[2] and low - high[2] >= atr * minVoidAtr
+bool newBearVoid = barstate.isconfirmed and high < low[2] and low[2] - high >= atr * minVoidAtr
+var float bullVoidTop = na
+var float bullVoidBottom = na
+var int bullVoidBar = na
+var bool bullVoidFresh = false
+var float bearVoidTop = na
+var float bearVoidBottom = na
+var int bearVoidBar = na
+var bool bearVoidFresh = false
+bool bullVoidFirstReturn = useVoidBonus and bullVoidFresh and not na(bullVoidBar) and bar_index > bullVoidBar and low <= bullVoidTop and high >= bullVoidBottom
+bool bearVoidFirstReturn = useVoidBonus and bearVoidFresh and not na(bearVoidBar) and bar_index > bearVoidBar and high >= bearVoidBottom and low <= bearVoidTop
+if barstate.isconfirmed and bullVoidFirstReturn
+    bullVoidFresh := false
+if barstate.isconfirmed and bearVoidFirstReturn
+    bearVoidFresh := false
+if newBullVoid
+    bullVoidTop := low
+    bullVoidBottom := high[2]
+    bullVoidBar := bar_index
+    bullVoidFresh := true
+if newBearVoid
+    bearVoidTop := low[2]
+    bearVoidBottom := high
+    bearVoidBar := bar_index
+    bearVoidFresh := true
+
+float reactionTolerance = math.max(2.0 * syminfo.mintick, atr * reactionToleranceAtr)
+bool longEmaTouch = low <= emaFast + reactionTolerance and high >= emaFast - reactionTolerance
+bool shortEmaTouch = high >= emaFast - reactionTolerance and low <= emaFast + reactionTolerance
+bool longSetupEmaTouch = low <= emaSlow + reactionTolerance and high >= emaSlow - reactionTolerance
+bool shortSetupEmaTouch = high >= emaSlow - reactionTolerance and low <= emaSlow + reactionTolerance
+bool longVwapTouch = not na(operativeVwap) and low <= operativeVwap + reactionTolerance and high >= operativeVwap - reactionTolerance
+bool shortVwapTouch = not na(operativeVwap) and high >= operativeVwap - reactionTolerance and low <= operativeVwap + reactionTolerance
+bool longPivotTouch = not na(lastPivotLow) and low <= lastPivotLow + reactionTolerance and high >= lastPivotLow - reactionTolerance
+bool shortPivotTouch = not na(lastPivotHigh) and high >= lastPivotHigh - reactionTolerance and low <= lastPivotHigh + reactionTolerance
+float candleBody = math.max(math.abs(close - open), syminfo.mintick)
+float lowerWick = math.max(0.0, math.min(open, close) - low)
+float upperWick = math.max(0.0, high - math.max(open, close))
+bool bullishRejection = close > open and closeLocation > 0.10 and lowerWick >= candleBody * 0.35
+bool bearishRejection = close < open and closeLocation < -0.10 and upperWick >= candleBody * 0.35
+bool trendLong = emaFast > emaSlow and emaSlow > trendLongBasis and emaFast > emaFast[2]
+bool trendShort = emaFast < emaSlow and emaSlow < trendLongBasis and emaFast < emaFast[2]
+bool longReactionReclaim = (longEmaTouch and close > emaFast) or (longSetupEmaTouch and close > emaSlow) or (longVwapTouch and close > operativeVwap) or (longPivotTouch and close > lastPivotLow) or bullVoidFirstReturn
+bool shortReactionReclaim = (shortEmaTouch and close < emaFast) or (shortSetupEmaTouch and close < emaSlow) or (shortVwapTouch and close < operativeVwap) or (shortPivotTouch and close < lastPivotHigh) or bearVoidFirstReturn
+bool reactionLong = barstate.isconfirmed and trendLong and longFastMtfVotes >= 1 and bullishRejection and longReactionReclaim and close > high[1]
+bool reactionShort = barstate.isconfirmed and trendShort and shortFastMtfVotes >= 1 and bearishRejection and shortReactionReclaim and close < low[1]
+float reactionComponent = reactionLong ? 1.0 : reactionShort ? -1.0 : 0.0
+
+// EMA200 extension fade. Price must have exceeded both an ATR envelope and a
+// residual-standard-deviation envelope at a confirmed pivot, with true regular
+// RSI divergence. A later rejection close triggers the causal setup.
+bool extLongContext = longSlowMtf
+bool extShortContext = shortSlowMtf
+bool extensionFadeLong = useExtensionFade and barstate.isconfirmed and bullishFadeArmed and close > high[1] and close > open and closeLocation > 0.25 and longTrendDistanceAtr > longTrendDistanceAtr[1] and extLongContext
+bool extensionFadeShort = useExtensionFade and barstate.isconfirmed and bearishFadeArmed and close < low[1] and close < open and closeLocation < -0.25 and longTrendDistanceAtr < longTrendDistanceAtr[1] and extShortContext
+float longExtensionQuality = extensionFadeLong ? math.min(100.0, 72.0 + math.max(0.0, rsiOversold - lastBullishFadeRsi) * 0.50 + math.max(0.0, math.abs(longTrendDistanceAtr[1]) - farMaAtr) * 10.0) : 0.0
+float shortExtensionQuality = extensionFadeShort ? math.min(100.0, 72.0 + math.max(0.0, lastBearishFadeRsi - rsiOverbought) * 0.50 + math.max(0.0, math.abs(longTrendDistanceAtr[1]) - farMaAtr) * 10.0) : 0.0
+// Resolve overlapping observations once. Every downstream gate, stop, label and
+// setup id then describes the same selected family.
+bool openingLongPriority = falseBreakLong or retestLong or acceptLong or efficientLongBreak
+bool openingShortPriority = falseBreakShort or retestShort or acceptShort or efficientShortBreak
+bool selectedLongExtension = extensionFadeLong and not openingLongPriority
+bool selectedShortExtension = extensionFadeShort and not openingShortPriority
+bool selectedLongReaction = reactionLong and not openingLongPriority and not selectedLongExtension
+bool selectedShortReaction = reactionShort and not openingShortPriority and not selectedShortExtension
+
+float microNum = structureComponent * 25.0 + impulseComponent * 10.0
+float microDen = 35.0
+float microPotentialDen = 35.0
+if not na(pivotComponent)
+    microNum += pivotComponent * 15.0
+    microDen += 15.0
+microPotentialDen += 15.0
+if useOpeningRange
+    if openingFresh
+        microPotentialDen += 30.0
+        microNum += openingComponent * 30.0
+        microDen += 30.0
+if not na(valueComponent)
+    microPotentialDen += 20.0
+    microNum += valueComponent * 20.0
+    microDen += 20.0
+microNum += reactionComponent * 15.0
+microDen += 15.0
+microPotentialDen += 15.0
+float microRaw = microDen > 0 ? 100.0 * microNum / microDen : na
+// Volume is evaluated separately as observed evidence and, for A-grade, as a
+// gate. Multiplying the whole micro score by volume counted it several times.
+float microScore = 100.0 * f_clamp(microRaw / 100.0)
+float microCoverage = microPotentialDen > 0 ? 100.0 * microDen / microPotentialDen * (volumeValid ? 1.0 : 0.90) : 0.0
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fusion, evidence quality and quality grade
+// ─────────────────────────────────────────────────────────────────────────────
+float fundamentalWeight = mode == "Scalp" ? 20.0 : mode == "Intraday" ? 30.0 : mode == "Swing" ? 55.0 : customFundWeight
+float transmissionWeight = mode == "Scalp" ? 30.0 : mode == "Intraday" ? 35.0 : mode == "Swing" ? 30.0 : customTransWeight
+float microWeight = mode == "Scalp" ? 50.0 : mode == "Intraday" ? 35.0 : mode == "Swing" ? 15.0 : customMicroWeight
+float fusionNum = 0.0
+float fusionDen = 0.0
+if not na(fundamentalScore)
+    fusionNum += fundamentalScore * fundamentalWeight
+    fusionDen += fundamentalWeight
+if not na(validatedTransmissionScore)
+    fusionNum += validatedTransmissionScore * transmissionWeight
+    fusionDen += transmissionWeight
+if not na(microScore)
+    fusionNum += microScore * microWeight
+    fusionDen += microWeight
+float totalScore = fusionDen > 0 ? fusionNum / fusionDen : na
+float configuredWeight = math.max(fundamentalWeight + transmissionWeight + microWeight, 1.0)
+float totalCoverage = (fundamentalCoverage * fundamentalWeight + transmissionCoverage * transmissionWeight + microCoverage * microWeight) / configuredWeight
+float direction = na(totalScore) or math.abs(totalScore) < 20 ? 0.0 : math.sign(totalScore)
+float activeLayers = (not na(fundamentalScore) ? 1.0 : 0.0) + (not na(validatedTransmissionScore) ? 1.0 : 0.0) + (not na(microScore) ? 1.0 : 0.0)
+float alignedLayers = (not na(fundamentalScore) and direction * fundamentalScore >= 20 ? 1.0 : 0.0) + (not na(validatedTransmissionScore) and direction * validatedTransmissionScore >= 20 ? 1.0 : 0.0) + (not na(microScore) and direction * microScore >= 20 ? 1.0 : 0.0)
+float alignmentQuality = activeLayers > 0 and direction != 0 ? 100.0 * alignedLayers / activeLayers : 0.0
+float scoreRegime = na(totalScore) ? 0.0 : totalScore >= 20 ? 1.0 : totalScore <= -20 ? -1.0 : 0.0
+int barsSinceRegimeChange = nz(ta.barssince(scoreRegime != scoreRegime[1]), 0)
+float scoreStability = 100.0 * math.min(1.0, barsSinceRegimeChange / 10.0)
+float volumeEvidenceQuality = volumeValid ? math.min(1.0, relVolume / minRelVolume) : 0.0
+float executionEvidenceNum = 0.0
+float executionEvidenceDen = 0.0
+if useOpeningRange
+    executionEvidenceNum += (openingReady ? openingQuality : 0.0) * 60.0
+    executionEvidenceDen += 60.0
+executionEvidenceNum += volumeEvidenceQuality * 40.0
+executionEvidenceDen += 40.0
+float executionQuality = executionEvidenceDen > 0 ? 100.0 * math.min(1.0, executionEvidenceNum / executionEvidenceDen) : 0.0
+float evidenceQuality = math.max(0.0, math.min(100.0, totalCoverage * 0.35 + alignmentQuality * 0.30 + scoreStability * 0.20 + executionQuality * 0.15))
+
+// Candidate structural stops and a simple price-distance cost estimate.
+// Funding, variable spread and realized slippage remain outside this model.
+float stopBuffer = math.max(2.0 * syminfo.mintick, atr * pivotBufferAtr)
+float longPivotCandidate = not na(lastPivotLow) and lastPivotLow < close ? lastPivotLow - stopBuffer : na
+float shortPivotCandidate = not na(lastPivotHigh) and lastPivotHigh > close ? lastPivotHigh + stopBuffer : na
+float longAdaptiveCandidate = recentLow3 - stopBuffer
+float shortAdaptiveCandidate = recentHigh3 + stopBuffer
+float longExtensionCandidate = not na(lastBullishFadePivot) and lastBullishFadePivot < close ? lastBullishFadePivot - stopBuffer : na
+float shortExtensionCandidate = not na(lastBearishFadePivot) and lastBearishFadePivot > close ? lastBearishFadePivot + stopBuffer : na
+float longOpeningCandidate = openingLongPriority and openingReady and openingLow < close ? openingLow - stopBuffer : na
+float shortOpeningCandidate = openingShortPriority and openingReady and openingHigh > close ? openingHigh + stopBuffer : na
+float longStructuralCandidate = selectedLongExtension ? longExtensionCandidate : openingLongPriority ? longOpeningCandidate : selectedLongReaction ? longAdaptiveCandidate : longPivotCandidate
+float shortStructuralCandidate = selectedShortExtension ? shortExtensionCandidate : openingShortPriority ? shortOpeningCandidate : selectedShortReaction ? shortAdaptiveCandidate : shortPivotCandidate
+float longStructuralDistance = not na(longStructuralCandidate) ? close - longStructuralCandidate : na
+float shortStructuralDistance = not na(shortStructuralCandidate) ? shortStructuralCandidate - close : na
+float atrSafetyDistance = atr * fallbackStopAtr
+// Never tighten a valid structural invalidation merely to pass maxStopAtr. A
+// structure farther than the configured maximum vetoes the setup downstream.
+float longRawRisk = not na(longStructuralDistance) and longStructuralDistance > 0 ? math.max(longStructuralDistance, atrSafetyDistance) : atrSafetyDistance
+float shortRawRisk = not na(shortStructuralDistance) and shortStructuralDistance > 0 ? math.max(shortStructuralDistance, atrSafetyDistance) : atrSafetyDistance
+float effectiveMinStopAtr = math.min(minStopAtr, maxStopAtr)
+float longRisk = math.max(longRawRisk, atr * effectiveMinStopAtr)
+float shortRisk = math.max(shortRawRisk, atr * effectiveMinStopAtr)
+float safeTp1R = tp1R
+float safeTp2R = math.max(tp2R, safeTp1R)
+float safeTp3R = math.max(tp3R, safeTp2R)
+float tp1Share = math.min(tp1ExitPct / 100.0, 1.0)
+float tp2Share = math.min(tp2ExitPct / 100.0, 1.0 - tp1Share)
+float tp3Share = math.max(0.0, 1.0 - tp1Share - tp2Share)
+float finalTargetR = tp3Share > 0.0 ? safeTp3R : tp2Share > 0.0 ? safeTp2R : safeTp1R
+bool longStopValid = not na(longRisk) and longRisk > 0 and longRisk <= atr * maxStopAtr and close - longRisk > 0
+bool shortStopValid = not na(shortRisk) and shortRisk > 0 and shortRisk <= atr * maxStopAtr and close - shortRisk * finalTargetR > 0
+float longCandidateStop = close - longRisk
+float shortCandidateStop = close + shortRisk
+float grossWeightedTargetR = tp1Share * safeTp1R + tp2Share * safeTp2R + tp3Share * safeTp3R
+float executionRate = (feePerSidePct + slippagePerSidePct) / 100.0
+float roundTripCostEstimate = close * executionRate * 2.0
+float longGrossReward = longRisk * grossWeightedTargetR
+float shortGrossReward = shortRisk * grossWeightedTargetR
+float longNetRR = (longGrossReward - roundTripCostEstimate) / math.max(longRisk + roundTripCostEstimate, syminfo.mintick)
+float shortNetRR = (shortGrossReward - roundTripCostEstimate) / math.max(shortRisk + roundTripCostEstimate, syminfo.mintick)
+float longCostLoad = roundTripCostEstimate / math.max(longGrossReward, syminfo.mintick)
+float shortCostLoad = roundTripCostEstimate / math.max(shortGrossReward, syminfo.mintick)
+
+// Frequency profiles alter thresholds in one place; pattern definitions stay
+// identical. User inputs remain hard safety limits where applicable.
+float profileSelectivity = frequencyProfile == "Selectivo" ? 1.0 : frequencyProfile == "Activo" ? -1.0 : 0.0
+float profileScoreA = 78.0 + 4.0 * profileSelectivity
+float profileScoreB = 60.0 + 6.0 * profileSelectivity
+float profileTechnicalB = 58.0 + 6.0 * profileSelectivity
+float profileMicroB = 44.0 + 6.0 * profileSelectivity
+float effectiveMinNetRRA = math.max(minNetRRA, frequencyProfile == "Selectivo" ? 1.60 : frequencyProfile == "Activo" ? 1.20 : 1.40)
+float effectiveMinNetRRB = math.max(minNetRRB, frequencyProfile == "Selectivo" ? 1.25 : frequencyProfile == "Activo" ? 0.90 : 1.10)
+float effectiveMaxCostLoad = math.min(maxCostLoad, frequencyProfile == "Selectivo" ? 0.30 : frequencyProfile == "Activo" ? 0.50 : 0.40)
+int effectiveCooldownBars = math.max(0, cooldownBars + (frequencyProfile == "Selectivo" ? 4 : frequencyProfile == "Activo" ? -2 : 0))
+float strongOpposition = frequencyProfile == "Selectivo" ? 30.0 : frequencyProfile == "Activo" ? 45.0 : 38.0
+
+bool blocked1 = f_event_window(event1Enabled, event1Time)
+bool blocked2 = f_event_window(event2Enabled, event2Time)
+bool blocked3 = f_event_window(event3Enabled, event3Time)
+bool eventBlocked = blocked1 or blocked2 or blocked3
+string activeEvent = blocked1 ? event1Name : blocked2 ? event2Name : blocked3 ? event3Name : "Libre"
+
+bool crossedPivotHigh = ta.crossover(close, lastPivotHigh)
+bool crossedPivotLow = ta.crossunder(close, lastPivotLow)
+bool pivotHighStable = not na(lastPivotHigh) and lastPivotHigh == lastPivotHigh[1]
+bool pivotLowStable = not na(lastPivotLow) and lastPivotLow == lastPivotLow[1]
+bool pivotBreakLong = pivotHighStable and crossedPivotHigh
+bool pivotBreakShort = pivotLowStable and crossedPivotLow
+bool allowStructureBreak = not useOpeningRange or (not inOpeningRange and not openingFresh)
+bool longEntryPattern = openingLongPriority or selectedLongReaction or selectedLongExtension or (allowStructureBreak and pivotBreakLong)
+bool shortEntryPattern = openingShortPriority or selectedShortReaction or selectedShortExtension or (allowStructureBreak and pivotBreakShort)
+bool longWatchPattern = longEntryPattern or rawBreakLong
+bool shortWatchPattern = shortEntryPattern or rawBreakShort
+string longSetupType = falseBreakLong ? "FALSE_BREAK" : retestLong ? "RETEST" : acceptLong ? "ACCEPT" : efficientLongBreak ? "BREAK" : selectedLongExtension ? "EXT_FADE" : selectedLongReaction ? "TREND_PULLBACK" : pivotBreakLong ? "PIVOT_BREAK" : rawBreakLong ? "BREAK_WATCH" : "NONE"
+string shortSetupType = falseBreakShort ? "FALSE_BREAK" : retestShort ? "RETEST" : acceptShort ? "ACCEPT" : efficientShortBreak ? "BREAK" : selectedShortExtension ? "EXT_FADE" : selectedShortReaction ? "TREND_PULLBACK" : pivotBreakShort ? "PIVOT_BREAK" : rawBreakShort ? "BREAK_WATCH" : "NONE"
+
+float minimumFundCoverage = gateMode == "Swing" ? 75.0 : 60.0
+bool fundamentalDataReady = macroTfValid and not na(fundamentalScore) and fundamentalCoverage >= minimumFundCoverage
+bool transmissionDataReady = transTfValid and not na(transmissionScore) and transmissionCoverage >= 70.0
+bool microDataReady = not na(microScore) and microCoverage >= 75.0
+bool volumeDataReady = not requireVolumeEvidence or volumeValid
+bool slowMtfTfValid = timeframe.in_seconds(mtf3) >= timeframe.in_seconds(timeframe.period)
+bool technicalDataReady = microDataReady and volumeDataReady and mtfTfValid and not na(mtfScore1) and not na(mtfScore2) and not na(mtfScore3)
+bool aDataReady = technicalDataReady and slowMtfTfValid and fundamentalDataReady and transmissionDataReady and transmissionLive
+bool fundamentalContextAvailable = macroTfValid and not na(fundamentalScore)
+// Stale Friday cross-market context must not veto a 24/7 BTC scalp during the
+// weekend. It remains descriptive; only live transmission can oppose B in
+// Scalp/Intraday. Swing may use the slower contextual window.
+bool transmissionContextAvailable = transTfValid and not na(transmissionScore) and (gateMode == "Swing" or transmissionLive or useClosedDecay)
+bool contextForAReady = fundamentalDataReady and transmissionDataReady and transmissionLive
+bool longContextNotOpposed = (not fundamentalContextAvailable or fundamentalScore > -strongOpposition) and (not transmissionContextAvailable or validatedTransmissionScore > -strongOpposition)
+bool shortContextNotOpposed = (not fundamentalContextAvailable or fundamentalScore < strongOpposition) and (not transmissionContextAvailable or validatedTransmissionScore < strongOpposition)
+// All executable setups, including fades, require 3/3 confirmed alignment.
+// This is a final entry gate; raw patterns can still appear as WATCH evidence.
+bool longBroadMtf = longStrictMtf
+bool shortBroadMtf = shortStrictMtf
+bool longBMtf = longStrictMtf
+bool shortBMtf = shortStrictMtf
+bool longSetupMtfB = longBMtf
+bool shortSetupMtfB = shortBMtf
+
+float longDirectionalMicro = math.max(0.0, microScore)
+float shortDirectionalMicro = math.max(0.0, -microScore)
+float longSetupMicroEvidence = selectedLongExtension ? math.max(longDirectionalMicro, longExtensionQuality) : longDirectionalMicro
+float shortSetupMicroEvidence = selectedShortExtension ? math.max(shortDirectionalMicro, shortExtensionQuality) : shortDirectionalMicro
+float longMtfQuality = math.min(100.0, longFastMtfVotes * 40.0 + (longSlowMtf ? 20.0 : 0.0))
+float shortMtfQuality = math.min(100.0, shortFastMtfVotes * 40.0 + (shortSlowMtf ? 20.0 : 0.0))
+float longPatternQuality = falseBreakLong or retestLong ? 100.0 : acceptLong ? 92.0 : efficientLongBreak ? 88.0 : selectedLongExtension ? 82.0 : selectedLongReaction ? 86.0 : pivotBreakLong ? 78.0 : rawBreakLong ? 45.0 : 0.0
+float shortPatternQuality = falseBreakShort or retestShort ? 100.0 : acceptShort ? 92.0 : efficientShortBreak ? 88.0 : selectedShortExtension ? 82.0 : selectedShortReaction ? 86.0 : pivotBreakShort ? 78.0 : rawBreakShort ? 45.0 : 0.0
+float longSetupRelVolume = (retestLong or acceptLong) and openingDirection == 1 and not na(breakoutVolume) ? breakoutVolume : relVolume
+float shortSetupRelVolume = (retestShort or acceptShort) and openingDirection == -1 and not na(breakoutVolume) ? breakoutVolume : relVolume
+float longObservedVolumeQuality = volumeValid ? 100.0 * math.min(1.0, longSetupRelVolume / math.max(minRelVolume, 0.01)) : requireVolumeEvidence ? 0.0 : 60.0
+float shortObservedVolumeQuality = volumeValid ? 100.0 * math.min(1.0, shortSetupRelVolume / math.max(minRelVolume, 0.01)) : requireVolumeEvidence ? 0.0 : 60.0
+float longConfluenceBonus = (close > trendLongBasis ? 3.0 : 0.0) + (volumeValid and longSetupRelVolume >= minRelVolume ? 3.0 : 0.0) + (bullVoidFirstReturn ? 4.0 : 0.0) + (openingFresh ? 2.0 : 0.0)
+float shortConfluenceBonus = (close < trendLongBasis ? 3.0 : 0.0) + (volumeValid and shortSetupRelVolume >= minRelVolume ? 3.0 : 0.0) + (bearVoidFirstReturn ? 4.0 : 0.0) + (openingFresh ? 2.0 : 0.0)
+float longTechnicalQuality = math.min(100.0, longSetupMicroEvidence * 0.45 + longMtfQuality * 0.25 + longPatternQuality * 0.20 + longObservedVolumeQuality * 0.10 + longConfluenceBonus)
+float shortTechnicalQuality = math.min(100.0, shortSetupMicroEvidence * 0.45 + shortMtfQuality * 0.25 + shortPatternQuality * 0.20 + shortObservedVolumeQuality * 0.10 + shortConfluenceBonus)
+float contextLayerCount = (fundamentalDataReady ? 1.0 : 0.0) + (transmissionDataReady ? 1.0 : 0.0)
+float longContextNum = (fundamentalDataReady ? math.max(0.0, math.min(100.0, 50.0 + fundamentalScore * 0.5)) : 0.0) + (transmissionDataReady ? math.max(0.0, math.min(100.0, 50.0 + validatedTransmissionScore * 0.5)) : 0.0)
+float shortContextNum = (fundamentalDataReady ? math.max(0.0, math.min(100.0, 50.0 - fundamentalScore * 0.5)) : 0.0) + (transmissionDataReady ? math.max(0.0, math.min(100.0, 50.0 - validatedTransmissionScore * 0.5)) : 0.0)
+float longContextQuality = contextLayerCount > 0 ? longContextNum / contextLayerCount : na
+float shortContextQuality = contextLayerCount > 0 ? shortContextNum / contextLayerCount : na
+float longRrQuality = math.max(0.0, math.min(100.0, 100.0 * longNetRR / math.max(effectiveMinNetRRB * 1.5, 0.01)))
+float shortRrQuality = math.max(0.0, math.min(100.0, 100.0 * shortNetRR / math.max(effectiveMinNetRRB * 1.5, 0.01)))
+float longCostQuality = math.max(0.0, math.min(100.0, 100.0 * (1.0 - longCostLoad / math.max(effectiveMaxCostLoad, 0.01))))
+float shortCostQuality = math.max(0.0, math.min(100.0, 100.0 * (1.0 - shortCostLoad / math.max(effectiveMaxCostLoad, 0.01))))
+// Costs remain an explicit veto below. Keeping them out of the score avoids
+// rewarding/penalizing the same evidence twice.
+float longExecutionQuality = longRrQuality
+float shortExecutionQuality = shortRrQuality
+float longFundamentalQuality = fundamentalDataReady ? math.max(0.0, math.min(100.0, 50.0 + fundamentalScore * 0.5)) : na
+float shortFundamentalQuality = fundamentalDataReady ? math.max(0.0, math.min(100.0, 50.0 - fundamentalScore * 0.5)) : na
+bool transmissionScoringAvailable = not useClosedTechnical and transmissionDataReady and (gateMode == "Swing" or transmissionLive or useClosedDecay)
+float longTransmissionQuality = transmissionScoringAvailable ? math.max(0.0, math.min(100.0, 50.0 + validatedTransmissionScore * 0.5)) : na
+float shortTransmissionQuality = transmissionScoringAvailable ? math.max(0.0, math.min(100.0, 50.0 - validatedTransmissionScore * 0.5)) : na
+float longEvidenceNum = longTechnicalQuality * microWeight + (na(longFundamentalQuality) ? 0.0 : longFundamentalQuality * fundamentalWeight) + (na(longTransmissionQuality) ? 0.0 : longTransmissionQuality * transmissionWeight)
+float shortEvidenceNum = shortTechnicalQuality * microWeight + (na(shortFundamentalQuality) ? 0.0 : shortFundamentalQuality * fundamentalWeight) + (na(shortTransmissionQuality) ? 0.0 : shortTransmissionQuality * transmissionWeight)
+float evidenceWeightDen = microWeight + (na(longFundamentalQuality) ? 0.0 : fundamentalWeight) + (na(longTransmissionQuality) ? 0.0 : transmissionWeight)
+float longEvidenceScore = evidenceWeightDen > 0 ? longEvidenceNum / evidenceWeightDen : na
+float shortEvidenceScore = evidenceWeightDen > 0 ? shortEvidenceNum / evidenceWeightDen : na
+float longContextAuditScore = na(longEvidenceScore) ? na : longEvidenceScore * 0.80 + longExecutionQuality * 0.20
+float shortContextAuditScore = na(shortEvidenceScore) ? na : shortEvidenceScore * 0.80 + shortExecutionQuality * 0.20
+float longTechnicalAuditScore = longTechnicalQuality * 0.80 + longExecutionQuality * 0.20
+float shortTechnicalAuditScore = shortTechnicalQuality * 0.80 + shortExecutionQuality * 0.20
+// The displayed/frozen score always matches the branch that can execute.
+float longAuditScore = useClosedTechnical ? longTechnicalAuditScore : longContextAuditScore
+float shortAuditScore = useClosedTechnical ? shortTechnicalAuditScore : shortContextAuditScore
+
+bool longCostValidA = longNetRR >= effectiveMinNetRRA and longCostLoad <= effectiveMaxCostLoad
+bool shortCostValidA = shortNetRR >= effectiveMinNetRRA and shortCostLoad <= effectiveMaxCostLoad
+bool longCostValidB = longNetRR >= effectiveMinNetRRB and longCostLoad <= effectiveMaxCostLoad
+bool shortCostValidB = shortNetRR >= effectiveMinNetRRB and shortCostLoad <= effectiveMaxCostLoad
+// Closed-market crypto reuses the validated Grade B thresholds. Observed volume
+// remains mandatory when requested, but the preferred 1.20x value is scored in
+// technicalQuality instead of vetoing the setup a second time.
+bool longClosedParticipation = not requireVolumeEvidence or volumeValid
+bool shortClosedParticipation = not requireVolumeEvidence or volumeValid
+bool longClosedTechnicalEvidence = not useClosedTechnical or (longStrictMtf and longClosedParticipation)
+bool shortClosedTechnicalEvidence = not useClosedTechnical or (shortStrictMtf and shortClosedParticipation)
+bool closedContextAAllowed = not cryptoTraditionalClosed
+bool longGradeAReady = longEntryPattern and not selectedLongExtension and aDataReady and correlationGateValid and closedContextAAllowed and not closedContextHardBlock and longBroadMtf and volumeValid and longSetupRelVolume >= minRelVolume and fundamentalScore >= 20 and validatedTransmissionScore >= 20 and longAuditScore >= profileScoreA and longCostValidA and longStopValid
+bool shortGradeAReady = shortEntryPattern and not selectedShortExtension and aDataReady and correlationGateValid and closedContextAAllowed and not closedContextHardBlock and shortBroadMtf and volumeValid and shortSetupRelVolume >= minRelVolume and fundamentalScore <= -20 and validatedTransmissionScore <= -20 and shortAuditScore >= profileScoreA and shortCostValidA and shortStopValid
+bool longContextualGradeBReady = not useClosedTechnical and longEntryPattern and technicalDataReady and correlationGateValid and closedContextGradeAllowed and not closedContextHardBlock and longSetupMtfB and longContextNotOpposed and longSetupMicroEvidence >= profileMicroB and longTechnicalQuality >= profileTechnicalB and longAuditScore >= profileScoreB and longCostValidB and longStopValid
+bool shortContextualGradeBReady = not useClosedTechnical and shortEntryPattern and technicalDataReady and correlationGateValid and closedContextGradeAllowed and not closedContextHardBlock and shortSetupMtfB and shortContextNotOpposed and shortSetupMicroEvidence >= profileMicroB and shortTechnicalQuality >= profileTechnicalB and shortAuditScore >= profileScoreB and shortCostValidB and shortStopValid
+bool longClosedTechnicalGradeBReady = useClosedTechnical and longEntryPattern and technicalDataReady and longClosedTechnicalEvidence and longSetupMtfB and longSetupMicroEvidence >= profileMicroB and longTechnicalQuality >= profileTechnicalB and longTechnicalAuditScore >= profileScoreB and longCostValidB and longStopValid
+bool shortClosedTechnicalGradeBReady = useClosedTechnical and shortEntryPattern and technicalDataReady and shortClosedTechnicalEvidence and shortSetupMtfB and shortSetupMicroEvidence >= profileMicroB and shortTechnicalQuality >= profileTechnicalB and shortTechnicalAuditScore >= profileScoreB and shortCostValidB and shortStopValid
+bool longGradeBReady = longContextualGradeBReady or longClosedTechnicalGradeBReady
+bool shortGradeBReady = shortContextualGradeBReady or shortClosedTechnicalGradeBReady
+string longGrade = longGradeAReady ? "A" : longGradeBReady ? "B" : "C"
+string shortGrade = shortGradeAReady ? "A" : shortGradeBReady ? "B" : "C"
+bool longFallback = longGrade == "B" and not contextForAReady
+bool shortFallback = shortGrade == "B" and not contextForAReady
+
+var int activeDirection = 0
+var int entryBar = na
+var int lastPlanEndBar = na
+var int lastUsedLongSetup = na
+var int lastUsedShortSetup = na
+var int lastWatchedLongSetup = na
+var int lastWatchedShortSetup = na
+var string setupGrade = "-"
+var string setupType = "NONE"
+var string setupIdText = ""
+var bool setupFallback = false
+var float setupAuditScore = na
+var float setupEntry = na
+var float setupStop = na
+var float setupTp1 = na
+var float setupTp2 = na
+var float setupTp3 = na
+var float setupNetRR = na
+var bool setupTp1Hit = false
+var bool setupTp2Hit = false
+var bool btTp1Filled = false
+var float btTrailStop = na
+var float btEntryAtr = na
+var float btFavorableExtreme = na
+var float btFrozenQty = na
+var float btFrozenRiskPct = na
+var int watchDirection = 0
+var int watchBar = na
+var string watchType = "NONE"
+var string watchIdText = ""
+var float watchEntry = na
+var float watchStop = na
+var float watchTp1 = na
+var float watchTp2 = na
+var float watchTp3 = na
+var float watchNetRR = na
+var float watchAuditScore = na
+var int watchSetupId = na
+var float watchPatternEvidence = na
+var float watchVolumeEvidence = na
+// Historical funnel counters are recalculated over the chart range. They are
+// diagnostics for the loaded sample, not counters since the indicator was added.
+var int closedContextWatchCount = 0
+var int closedContextEntryCount = 0
+var int closedContextPromotionCount = 0
+var int closedContextMtfVetoCount = 0
+var int closedContextPatternVetoCount = 0
+var int closedContextQualityVetoCount = 0
+var int closedContextCostVetoCount = 0
+var int closedContextExpiredWatchCount = 0
+
+int pivotHighSetupId = nz(ta.valuewhen(not na(pivotHigh), time_close[pivotLen], 0), time_close)
+int pivotLowSetupId = nz(ta.valuewhen(not na(pivotLow), time_close[pivotLen], 0), time_close)
+int currentLongSetupId = selectedLongExtension ? nz(lastBullishFadeTime, time_close) : falseBreakLong or selectedLongReaction ? time_close : retestLong or acceptLong or efficientLongBreak or rawBreakLong ? nz(breakoutTime, time_close) : pivotHighSetupId
+int currentShortSetupId = selectedShortExtension ? nz(lastBearishFadeTime, time_close) : falseBreakShort or selectedShortReaction ? time_close : retestShort or acceptShort or efficientShortBreak or rawBreakShort ? nz(breakoutTime, time_close) : pivotLowSetupId
+string currentLongIdText = chartTicker + "-" + timeframe.period + "-L-" + str.tostring(currentLongSetupId)
+string currentShortIdText = chartTicker + "-" + timeframe.period + "-S-" + str.tostring(currentShortSetupId)
+
+// Reset on the first confirmed bar of each trading day. This also works when a
+// symbol has no bar inside the configured opening-range window.
+bool modelSessionReset = barstate.isconfirmed and gateMode != "Swing" and timeframe.isintraday and timeframe.change("D")
+if modelSessionReset
+    if activeDirection != 0
+        lastPlanEndBar := bar_index
+    activeDirection := 0
+    entryBar := na
+    lastUsedLongSetup := na
+    lastUsedShortSetup := na
+    lastWatchedLongSetup := na
+    lastWatchedShortSetup := na
+    watchDirection := 0
+    watchBar := na
+    watchSetupId := na
+    watchPatternEvidence := na
+    watchVolumeEvidence := na
+    setupTp1Hit := false
+    setupTp2Hit := false
+    bullVoidFresh := false
+    bearVoidFresh := false
+
+bool planEndedThisBar = false
+bool activeLongTargetHit = tp3Share > 0.0 ? high >= setupTp3 : tp2Share > 0.0 ? high >= setupTp2 : high >= setupTp1
+bool activeShortTargetHit = tp3Share > 0.0 ? low <= setupTp3 : tp2Share > 0.0 ? low <= setupTp2 : low <= setupTp1
+bool activePlanExpired = activeDirection != 0 and not na(entryBar) and bar_index - entryBar >= maxPlanBars
+float activeStop = setupTp1Hit ? setupEntry : setupStop
+if activeDirection == 1 and bar_index > entryBar and (low <= activeStop or activeLongTargetHit or activePlanExpired)
+    activeDirection := 0
+    lastPlanEndBar := bar_index
+    planEndedThisBar := true
+if activeDirection == -1 and bar_index > entryBar and (high >= activeStop or activeShortTargetHit or activePlanExpired)
+    activeDirection := 0
+    lastPlanEndBar := bar_index
+    planEndedThisBar := true
+// TP1 moves the displayed/monitored stop to breakeven from the next bar. We
+// evaluate exits first so a bar touching TP1 and the original stop is not
+// credited with a hindsight breakeven fill.
+if not planEndedThisBar and activeDirection == 1 and bar_index > entryBar
+    if not setupTp1Hit and high >= setupTp1
+        setupTp1Hit := true
+    if not setupTp2Hit and high >= setupTp2
+        setupTp2Hit := true
+if not planEndedThisBar and activeDirection == -1 and bar_index > entryBar
+    if not setupTp1Hit and low <= setupTp1
+        setupTp1Hit := true
+    if not setupTp2Hit and low <= setupTp2
+        setupTp2Hit := true
+bool watchTimedOut = watchDirection != 0 and not na(watchBar) and bar_index - watchBar >= maxWatchBars
+bool watchLongInvalid = watchDirection == 1 and (low <= watchStop or high >= watchTp1 or (watchType != "EXT_FADE" and emaFast < emaSlow and close < emaFast))
+bool watchShortInvalid = watchDirection == -1 and (high >= watchStop or low <= watchTp1 or (watchType != "EXT_FADE" and emaFast > emaSlow and close > emaFast))
+if watchTimedOut or watchLongInvalid or watchShortInvalid
+    if barstate.isconfirmed and useClosedTechnical
+        closedContextExpiredWatchCount += 1
+    watchDirection := 0
+    watchBar := na
+    watchSetupId := na
+    watchPatternEvidence := na
+    watchVolumeEvidence := na
+bool watchUsesOpeningBreak = watchType == "BREAK_WATCH" or watchType == "BREAK" or watchType == "RETEST" or watchType == "ACCEPT"
+if watchDirection != 0 and watchUsesOpeningBreak and (not openingFresh or na(breakoutBar) or bar_index - breakoutBar > retestBars)
+    if barstate.isconfirmed and useClosedTechnical
+        closedContextExpiredWatchCount += 1
+    watchDirection := 0
+    watchBar := na
+    watchSetupId := na
+    watchPatternEvidence := na
+    watchVolumeEvidence := na
+
+bool cooldownReady = na(lastPlanEndBar) or bar_index - lastPlanEndBar >= effectiveCooldownBars
+bool unusedLongSetup = na(lastUsedLongSetup) or currentLongSetupId != lastUsedLongSetup
+bool unusedShortSetup = na(lastUsedShortSetup) or currentShortSetupId != lastUsedShortSetup
+// A WATCH keeps only the original pattern/participation evidence. For up to
+// maxWatchBars the live micro, confirmed 3/3 MTF, costs and stop are rechecked.
+// This fixes the prior one-bar coincidence problem without weakening any risk
+// gate or allowing the experimental extension-fade route.
+float longWatchRecheckTechnical = watchDirection == 1 ? math.min(100.0, longSetupMicroEvidence * 0.45 + longMtfQuality * 0.25 + nz(watchPatternEvidence, 0.0) * 0.20 + math.max(longObservedVolumeQuality, nz(watchVolumeEvidence, 0.0)) * 0.10 + longConfluenceBonus) : na
+float shortWatchRecheckTechnical = watchDirection == -1 ? math.min(100.0, shortSetupMicroEvidence * 0.45 + shortMtfQuality * 0.25 + nz(watchPatternEvidence, 0.0) * 0.20 + math.max(shortObservedVolumeQuality, nz(watchVolumeEvidence, 0.0)) * 0.10 + shortConfluenceBonus) : na
+float longWatchRecheckAudit = watchDirection == 1 ? longWatchRecheckTechnical * 0.80 + longExecutionQuality * 0.20 : na
+float shortWatchRecheckAudit = watchDirection == -1 ? shortWatchRecheckTechnical * 0.80 + shortExecutionQuality * 0.20 : na
+bool longWatchPromotionReady = useClosedTechnical and watchDirection == 1 and watchType != "EXT_FADE" and not na(watchBar) and bar_index > watchBar and bar_index - watchBar <= maxWatchBars and technicalDataReady and longStrictMtf and longSetupMicroEvidence >= profileMicroB and longWatchRecheckTechnical >= profileTechnicalB and longWatchRecheckAudit >= profileScoreB and longCostValidB and longStopValid
+bool shortWatchPromotionReady = useClosedTechnical and watchDirection == -1 and watchType != "EXT_FADE" and not na(watchBar) and bar_index > watchBar and bar_index - watchBar <= maxWatchBars and technicalDataReady and shortStrictMtf and shortSetupMicroEvidence >= profileMicroB and shortWatchRecheckTechnical >= profileTechnicalB and shortWatchRecheckAudit >= profileScoreB and shortCostValidB and shortStopValid
+bool longDirectReady = unusedLongSetup and (longGrade == "A" or longGrade == "B")
+bool shortDirectReady = unusedShortSetup and (shortGrade == "A" or shortGrade == "B")
+bool longWatchUnused = na(lastUsedLongSetup) or watchSetupId != lastUsedLongSetup
+bool shortWatchUnused = na(lastUsedShortSetup) or watchSetupId != lastUsedShortSetup
+bool longEligible = barstate.isconfirmed and activeDirection == 0 and not planEndedThisBar and cooldownReady and not eventBlocked and not btDailyLossLocked and btInfrastructureValid and (longDirectReady or (longWatchPromotionReady and longWatchUnused))
+bool shortEligible = barstate.isconfirmed and activeDirection == 0 and not planEndedThisBar and cooldownReady and not eventBlocked and not btDailyLossLocked and btInfrastructureValid and (shortDirectReady or (shortWatchPromotionReady and shortWatchUnused))
+float longDecisionScore = longDirectReady ? longAuditScore : longWatchRecheckAudit
+float shortDecisionScore = shortDirectReady ? shortAuditScore : shortWatchRecheckAudit
+bool longSignal = longEligible and (not shortEligible or longDecisionScore >= shortDecisionScore)
+bool shortSignal = shortEligible and not longSignal
+bool longSignalFromWatch = longSignal and not longDirectReady and longWatchPromotionReady
+bool shortSignalFromWatch = shortSignal and not shortDirectReady and shortWatchPromotionReady
+int priorLastUsedLongSetup = lastUsedLongSetup
+int priorLastUsedShortSetup = lastUsedShortSetup
+
+if longSignal
+    activeDirection := 1
+    entryBar := bar_index
+    lastUsedLongSetup := longSignalFromWatch ? watchSetupId : currentLongSetupId
+    setupGrade := longSignalFromWatch ? "B" : longGrade
+    setupType := longSignalFromWatch ? watchType : longSetupType
+    setupIdText := longSignalFromWatch ? watchIdText : currentLongIdText
+    setupFallback := longSignalFromWatch ? true : longFallback
+    setupAuditScore := longSignalFromWatch ? longWatchRecheckAudit : longAuditScore
+    setupEntry := close
+    setupStop := longCandidateStop
+    float longFrozenRisk = setupEntry - setupStop
+    setupTp1 := setupEntry + longFrozenRisk * safeTp1R
+    setupTp2 := setupEntry + longFrozenRisk * safeTp2R
+    setupTp3 := setupEntry + longFrozenRisk * safeTp3R
+    setupNetRR := longNetRR
+    setupTp1Hit := false
+    setupTp2Hit := false
+    watchDirection := 0
+    watchBar := na
+    watchSetupId := na
+    watchPatternEvidence := na
+    watchVolumeEvidence := na
+if shortSignal
+    activeDirection := -1
+    entryBar := bar_index
+    lastUsedShortSetup := shortSignalFromWatch ? watchSetupId : currentShortSetupId
+    setupGrade := shortSignalFromWatch ? "B" : shortGrade
+    setupType := shortSignalFromWatch ? watchType : shortSetupType
+    setupIdText := shortSignalFromWatch ? watchIdText : currentShortIdText
+    setupFallback := shortSignalFromWatch ? true : shortFallback
+    setupAuditScore := shortSignalFromWatch ? shortWatchRecheckAudit : shortAuditScore
+    setupEntry := close
+    setupStop := shortCandidateStop
+    float shortFrozenRisk = setupStop - setupEntry
+    setupTp1 := setupEntry - shortFrozenRisk * safeTp1R
+    setupTp2 := setupEntry - shortFrozenRisk * safeTp2R
+    setupTp3 := setupEntry - shortFrozenRisk * safeTp3R
+    setupNetRR := shortNetRR
+    setupTp1Hit := false
+    setupTp2Hit := false
+    watchDirection := 0
+    watchBar := na
+    watchSetupId := na
+    watchPatternEvidence := na
+    watchVolumeEvidence := na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Research Strategy Tester execution
+// Uses the exact confirmed ENTRY events and frozen levels produced above.
+// Orders fill at bar close; partial targets are 50/30/20 by default, and the
+// remaining stop moves to entry only after TP1 was observed on a completed bar.
+// ─────────────────────────────────────────────────────────────────────────────
+bool btInDateRange = time >= btStartTime and time <= btEndTime
+float btPointValue = btEffectivePointValue
+// Technical-only crypto entries use half the configured account risk. This
+// reduces closed-session drawdown without changing any setup/grade threshold.
+float btContextRiskFactor = useClosedTechnical and btSizeMode == "Risk %" ? 0.50 : 1.0
+float btRiskCash = btEquity * btRiskPct / 100.0 * btContextRiskFactor
+float btNotionalPerUnitAccount = close > 0 ? strategy.convert_to_account(close * btPointValue) : na
+float btExposureQty = not na(btNotionalPerUnitAccount) and btNotionalPerUnitAccount > 0 ? btEquity * btMaxExposurePct / 100.0 / btNotionalPerUnitAccount : 0.0
+// Risk includes stop distance and configured round-trip execution costs. Native
+// strategy.equity compounds the risk budget after every realized/open change.
+float btLongRiskPerUnitAccount = strategy.convert_to_account((longRisk + roundTripCostEstimate) * btPointValue)
+float btShortRiskPerUnitAccount = strategy.convert_to_account((shortRisk + roundTripCostEstimate) * btPointValue)
+float btLongRiskQtyRaw = btLongRiskPerUnitAccount > 0 ? btRiskCash / btLongRiskPerUnitAccount : 0.0
+float btShortRiskQtyRaw = btShortRiskPerUnitAccount > 0 ? btRiskCash / btShortRiskPerUnitAccount : 0.0
+float btLongSelectedQtyRaw = btSizeMode == "Fixed quantity" ? btFixedQty : math.min(btLongRiskQtyRaw, btExposureQty)
+float btShortSelectedQtyRaw = btSizeMode == "Fixed quantity" ? btFixedQty : math.min(btShortRiskQtyRaw, btExposureQty)
+float btLongSuggestedQty = f_floor_qty(btLongSelectedQtyRaw, btEffectiveQtyStep, btFeedMinQty)
+float btShortSuggestedQty = f_floor_qty(btShortSelectedQtyRaw, btEffectiveQtyStep, btFeedMinQty)
+float btOrderQty = longSignal ? btLongSuggestedQty : shortSignal ? btShortSuggestedQty : 0.0
+
+// Plan-complete engine. Partial TP fills stay inside one plan and N increases
+// only after every remaining slice is flat.
+var array<int> diagPlanCount = array.new_int(32, 0)
+var array<int> diagWinCount = array.new_int(32, 0)
+var array<float> diagPnlSum = array.new_float(32, 0.0)
+var array<float> diagPositivePnl = array.new_float(32, 0.0)
+var array<float> diagNegativePnl = array.new_float(32, 0.0)
+var array<float> diagMfeRSum = array.new_float(32, 0.0)
+var array<float> diagMaeRSum = array.new_float(32, 0.0)
+var array<float> diagBarsSum = array.new_float(32, 0.0)
+var array<float> diagFundingSum = array.new_float(32, 0.0)
+var array<float> diagSlippageSum = array.new_float(32, 0.0)
+var array<int> diagExcursionCount = array.new_int(32, 0)
+var int diagActiveBucket = na
+var float diagActivePnl = 0.0
+var float diagActiveCommission = 0.0
+var int diagActiveSlices = 0
+var int diagClosedCursor = 0
+var float diagNetProfitCursor = 0.0
+var bool planFillObserved = false
+var int planDirection = 0
+var int planClosedTradesStart = 0
+var int planEntryBarActual = na
+var int planEntryTimeActual = na
+var float planEntryPriceActual = na
+var float planInitialRiskPrice = na
+var float planInitialQty = na
+var float planLastOpenNotional = na
+var float planMfePrice = 0.0
+var float planMaePrice = 0.0
+var float planClosedMfeR = 0.0
+var float planClosedMaeR = 0.0
+var float planFundingCost = 0.0
+var float planSlippageCost = 0.0
+var int planLastFundingBucket = na
+var int planPriorLastUsedLongSetup = na
+var int planPriorLastUsedShortSetup = na
+var int completePlanCount = 0
+var int excursionPlanCount = 0
+var float completePlanNetSum = 0.0
+var float completePlanFundingSum = 0.0
+var float completePlanSlippageSum = 0.0
+var float completePlanMfeRSum = 0.0
+var float completePlanMaeRSum = 0.0
+var float completePlanBarsSum = 0.0
+bool diagTradeJustClosed = false
+int diagClosedBucketCode = na
+float diagClosedPlanAdjustedNet = na
+float diagClosedPlanCommission = na
+float diagClosedPlanFunding = na
+float diagClosedPlanSlippage = na
+float diagClosedPlanMfeR = na
+float diagClosedPlanMaeR = na
+float diagClosedPlanBars = na
+
+bool planJustOpened = not planFillObserved and not na(diagActiveBucket) and strategy.position_size != 0
+if planJustOpened
+    planFillObserved := true
+    planDirection := strategy.position_size > 0 ? 1 : -1
+    planEntryPriceActual := strategy.position_avg_price
+    planEntryBarActual := strategy.opentrades.entry_bar_index(0)
+    planEntryTimeActual := strategy.opentrades.entry_time(0)
+    planInitialRiskPrice := math.abs(planEntryPriceActual - setupStop)
+    planInitialQty := na(planInitialQty) ? math.abs(strategy.position_size) : planInitialQty
+    planLastOpenNotional := strategy.convert_to_account(math.abs(strategy.position_size) * planEntryPriceActual * btEffectivePointValue)
+    int fundingMsOnOpen = fundingIntervalHours * 60 * 60 * 1000
+    planLastFundingBucket := int(planEntryTimeActual / fundingMsOnOpen)
+
+// Excursions use completed OHLC bars after the actual fill. They are comparable
+// across different partial-exit distributions but are not tick reconstruction.
+if planFillObserved and strategy.position_size != 0 and barstate.isconfirmed and bar_index > planEntryBarActual
+    float favorableExcursion = planDirection == 1 ? high - planEntryPriceActual : planEntryPriceActual - low
+    float adverseExcursion = planDirection == 1 ? planEntryPriceActual - low : high - planEntryPriceActual
+    planMfePrice := math.max(planMfePrice, math.max(favorableExcursion, 0.0))
+    planMaePrice := math.max(planMaePrice, math.max(adverseExcursion, 0.0))
+    planLastOpenNotional := strategy.convert_to_account(math.abs(strategy.position_size) * close * btEffectivePointValue)
+
+// Pine exposes no historical funding series. When enabled, this accrues a
+// disclosed estimate on the still-open notional at each configured interval.
+if includeFundingCost and planFillObserved and strategy.position_size != 0 and barstate.isconfirmed
+    int fundingMs = fundingIntervalHours * 60 * 60 * 1000
+    int fundingClock = na(time_close) ? time : time_close
+    int currentFundingBucket = int(fundingClock / fundingMs)
+    int elapsedFundingEvents = math.max(currentFundingBucket - nz(planLastFundingBucket, currentFundingBucket), 0)
+    if elapsedFundingEvents > 0
+        float openNotional = strategy.convert_to_account(math.abs(strategy.position_size) * close * btEffectivePointValue)
+        planFundingCost += openNotional * fundingPctInterval / 100.0 * elapsedFundingEvents
+        planLastFundingBucket := currentFundingBucket
+
+if strategy.closedtrades > diagClosedCursor
+    // strategy.netprofit already includes the declared 0.08% commission. Keep
+    // observed commission as evidence and never subtract it a second time.
+    diagActivePnl += strategy.netprofit - diagNetProfitCursor
+    for tradeNumber = diagClosedCursor to strategy.closedtrades - 1
+        float sliceEntryPrice = strategy.closedtrades.entry_price(tradeNumber)
+        float sliceExitPrice = strategy.closedtrades.exit_price(tradeNumber)
+        float sliceQty = math.abs(strategy.closedtrades.size(tradeNumber))
+        int sliceEntryBar = strategy.closedtrades.entry_bar_index(tradeNumber)
+        int sliceEntryTime = strategy.closedtrades.entry_time(tradeNumber)
+        if not planFillObserved
+            // Reconcile plans that opened and closed before Pine observed an
+            // intermediate non-flat execution. The order-time snapshot keeps
+            // the tracker alive; closed-trade data supplies the actual fill.
+            planFillObserved := true
+            planEntryPriceActual := sliceEntryPrice
+            planEntryBarActual := sliceEntryBar
+            planEntryTimeActual := sliceEntryTime
+            planInitialRiskPrice := math.abs(sliceEntryPrice - setupStop)
+            planInitialQty := na(planInitialQty) ? sliceQty : planInitialQty
+            int fundingMsFromClosedTrade = fundingIntervalHours * 60 * 60 * 1000
+            planLastFundingBucket := na(planLastFundingBucket) ? int(sliceEntryTime / fundingMsFromClosedTrade) : planLastFundingBucket
+        // Exit fills are the only causal evidence available for the terminal
+        // bar. Recording them avoids omitting a stop/target without pretending
+        // to know whether that bar's high or low occurred before the exit.
+        float terminalFavorable = planDirection == 1 ? sliceExitPrice - planEntryPriceActual : planEntryPriceActual - sliceExitPrice
+        float terminalAdverse = planDirection == 1 ? planEntryPriceActual - sliceExitPrice : sliceExitPrice - planEntryPriceActual
+        planMfePrice := math.max(planMfePrice, math.max(terminalFavorable, 0.0))
+        planMaePrice := math.max(planMaePrice, math.max(terminalAdverse, 0.0))
+        // Built-in per-fill excursions preserve the terminal bar without
+        // inventing its intrabar ordering. Normalize each partial by its own
+        // initial risk cash, then keep the plan-wide maximum in R.
+        float sliceRiskCash = math.abs(strategy.convert_to_account(planInitialRiskPrice * sliceQty * btEffectivePointValue))
+        if sliceRiskCash > 0.0
+            float sliceMfeR = strategy.closedtrades.max_runup(tradeNumber) / sliceRiskCash
+            float sliceMaeR = strategy.closedtrades.max_drawdown(tradeNumber) / sliceRiskCash
+            planClosedMfeR := math.max(planClosedMfeR, nz(sliceMfeR, 0.0))
+            planClosedMaeR := math.max(planClosedMaeR, nz(sliceMaeR, 0.0))
+        float sliceTurnoverAccount = strategy.convert_to_account((sliceEntryPrice + sliceExitPrice) * sliceQty * btEffectivePointValue)
+        planSlippageCost += sliceTurnoverAccount * slippagePerSidePct / 100.0
+        diagActiveCommission += strategy.closedtrades.commission(tradeNumber)
+        diagActiveSlices += 1
+    diagClosedCursor := strategy.closedtrades
+    diagNetProfitCursor := strategy.netprofit
+
+bool completePlanClosed = not na(diagActiveBucket) and strategy.position_size == 0 and strategy.closedtrades > planClosedTradesStart and diagActiveSlices > 0
+if completePlanClosed
+    int closedBucket = diagActiveBucket
+    int finalExitBar = na
+    int finalExitTime = na
+    int actualEntryBar = na
+    for tradeNumber = planClosedTradesStart to strategy.closedtrades - 1
+        int sliceExitBar = strategy.closedtrades.exit_bar_index(tradeNumber)
+        int sliceExitTime = strategy.closedtrades.exit_time(tradeNumber)
+        int sliceEntryBar = strategy.closedtrades.entry_bar_index(tradeNumber)
+        finalExitBar := na(finalExitBar) ? sliceExitBar : math.max(finalExitBar, sliceExitBar)
+        finalExitTime := na(finalExitTime) ? sliceExitTime : math.max(finalExitTime, sliceExitTime)
+        actualEntryBar := na(actualEntryBar) ? sliceEntryBar : math.min(actualEntryBar, sliceEntryBar)
+    // Duration counts completed exposure intervals. A same-bar plan is one
+    // observation; multi-bar plans are not inflated by an extra endpoint.
+    int planBars = not na(finalExitBar) and not na(actualEntryBar) ? math.max(finalExitBar - actualEntryBar, 1) : 1
+    // Complete the last funding interval even when the final execution is
+    // already flat and no live position remains to value.
+    if includeFundingCost and not na(finalExitTime) and not na(planLastFundingBucket)
+        int fundingMsAtClose = fundingIntervalHours * 60 * 60 * 1000
+        int finalFundingBucket = int(finalExitTime / fundingMsAtClose)
+        int pendingFundingEvents = math.max(finalFundingBucket - planLastFundingBucket, 0)
+        if pendingFundingEvents > 0
+            float fallbackNotional = strategy.convert_to_account(nz(planInitialQty, 0.0) * nz(planEntryPriceActual, 0.0) * btEffectivePointValue)
+            float terminalNotional = nz(planLastOpenNotional, fallbackNotional)
+            planFundingCost += terminalNotional * fundingPctInterval / 100.0 * pendingFundingEvents
+            planLastFundingBucket := finalFundingBucket
+    float openBarMfeR = planFillObserved and planInitialRiskPrice > syminfo.mintick ? planMfePrice / planInitialRiskPrice : na
+    float openBarMaeR = planFillObserved and planInitialRiskPrice > syminfo.mintick ? planMaePrice / planInitialRiskPrice : na
+    float planMfeR = planFillObserved and planInitialRiskPrice > syminfo.mintick ? math.max(nz(openBarMfeR, 0.0), planClosedMfeR) : na
+    float planMaeR = planFillObserved and planInitialRiskPrice > syminfo.mintick ? math.max(nz(openBarMaeR, 0.0), planClosedMaeR) : na
+    // Native netprofit already includes the declared 0.08% commission. The
+    // diagnostic net additionally subtracts modeled slippage and funding.
+    float adjustedNet = diagActivePnl - planSlippageCost - planFundingCost
+    array.set(diagPlanCount, closedBucket, array.get(diagPlanCount, closedBucket) + 1)
+    array.set(diagPnlSum, closedBucket, array.get(diagPnlSum, closedBucket) + adjustedNet)
+    array.set(diagBarsSum, closedBucket, array.get(diagBarsSum, closedBucket) + planBars)
+    array.set(diagFundingSum, closedBucket, array.get(diagFundingSum, closedBucket) + planFundingCost)
+    array.set(diagSlippageSum, closedBucket, array.get(diagSlippageSum, closedBucket) + planSlippageCost)
+    if not na(planMfeR) and not na(planMaeR)
+        array.set(diagMfeRSum, closedBucket, array.get(diagMfeRSum, closedBucket) + planMfeR)
+        array.set(diagMaeRSum, closedBucket, array.get(diagMaeRSum, closedBucket) + planMaeR)
+        array.set(diagExcursionCount, closedBucket, array.get(diagExcursionCount, closedBucket) + 1)
+        excursionPlanCount += 1
+        completePlanMfeRSum += planMfeR
+        completePlanMaeRSum += planMaeR
+    if adjustedNet > 0
+        array.set(diagWinCount, closedBucket, array.get(diagWinCount, closedBucket) + 1)
+        array.set(diagPositivePnl, closedBucket, array.get(diagPositivePnl, closedBucket) + adjustedNet)
+    else if adjustedNet < 0
+        array.set(diagNegativePnl, closedBucket, array.get(diagNegativePnl, closedBucket) + math.abs(adjustedNet))
+    completePlanCount += 1
+    completePlanNetSum += adjustedNet
+    completePlanFundingSum += planFundingCost
+    completePlanSlippageSum += planSlippageCost
+    completePlanBarsSum += planBars
+    diagTradeJustClosed := true
+    diagClosedBucketCode := closedBucket + 1
+    diagClosedPlanAdjustedNet := adjustedNet
+    diagClosedPlanCommission := diagActiveCommission
+    diagClosedPlanFunding := planFundingCost
+    diagClosedPlanSlippage := planSlippageCost
+    diagClosedPlanMfeR := planMfeR
+    diagClosedPlanMaeR := planMaeR
+    diagClosedPlanBars := planBars
+    diagActiveBucket := na
+    diagActivePnl := 0.0
+    diagActiveCommission := 0.0
+    diagActiveSlices := 0
+    planFillObserved := false
+    planDirection := 0
+    planEntryBarActual := na
+    planEntryTimeActual := na
+    planEntryPriceActual := na
+    planInitialRiskPrice := na
+    planInitialQty := na
+    planLastOpenNotional := na
+    planMfePrice := 0.0
+    planMaePrice := 0.0
+    planClosedMfeR := 0.0
+    planClosedMaeR := 0.0
+    planFundingCost := 0.0
+    planSlippageCost := 0.0
+    planLastFundingBucket := na
+    planPriorLastUsedLongSetup := na
+    planPriorLastUsedShortSetup := na
+
+// A market order rejected by the broker emulator (for example because the
+// requested future exceeds available margin) must not leave a phantom plan.
+bool planOrderRejected = not na(diagActiveBucket) and not planFillObserved and strategy.position_size == 0 and strategy.closedtrades == planClosedTradesStart and not na(planEntryBarActual) and bar_index > planEntryBarActual
+if planOrderRejected
+    int rejectedDirection = planDirection
+    diagActiveBucket := na
+    diagActivePnl := 0.0
+    diagActiveCommission := 0.0
+    diagActiveSlices := 0
+    planDirection := 0
+    planEntryBarActual := na
+    planEntryTimeActual := na
+    planEntryPriceActual := na
+    planInitialRiskPrice := na
+    planInitialQty := na
+    planLastOpenNotional := na
+    planMfePrice := 0.0
+    planMaePrice := 0.0
+    planClosedMfeR := 0.0
+    planClosedMaeR := 0.0
+    planFundingCost := 0.0
+    planSlippageCost := 0.0
+    planLastFundingBucket := na
+    activeDirection := 0
+    entryBar := na
+    setupTp1Hit := false
+    setupTp2Hit := false
+    btTp1Filled := false
+    btTrailStop := na
+    btEntryAtr := na
+    btFavorableExtreme := na
+    btFrozenQty := na
+    btFrozenRiskPct := na
+    if rejectedDirection == 1
+        lastUsedLongSetup := planPriorLastUsedLongSetup
+    else if rejectedDirection == -1
+        lastUsedShortSetup := planPriorLastUsedShortSetup
+    planPriorLastUsedLongSetup := na
+    planPriorLastUsedShortSetup := na
+
+float averagePlanBars = completePlanCount > 0 ? completePlanBarsSum / completePlanCount : na
+float averagePlanMfeR = excursionPlanCount > 0 ? completePlanMfeRSum / excursionPlanCount : na
+float averagePlanMaeR = excursionPlanCount > 0 ? completePlanMaeRSum / excursionPlanCount : na
+float planMfeMaeEfficiency = completePlanMaeRSum > 0.0 ? completePlanMfeRSum / completePlanMaeRSum : na
+string planEfficiencyText = completePlanMaeRSum > 0.0 ? f_fmt2(planMfeMaeEfficiency) : completePlanMfeRSum > 0.0 ? "INF" : "N/D"
+
+bool btPositionJustClosed = strategy.position_size == 0 and nz(strategy.position_size[1], 0.0) != 0
+if btPositionJustClosed
+    btTp1Filled := false
+    btTrailStop := na
+    btEntryAtr := na
+    btFavorableExtreme := na
+    btFrozenQty := na
+    btFrozenRiskPct := na
+
+// Use an observed reduction in the open position to activate BE/trailing. This
+// avoids granting a TP1 fill merely because the historical candle touched it.
+bool btPositionReduced = strategy.position_size != 0 and nz(strategy.position_size[1], 0.0) != 0 and math.abs(strategy.position_size) < math.abs(strategy.position_size[1])
+if btPositionReduced and not btTp1Filled
+    btTp1Filled := true
+    btFavorableExtreme := strategy.position_size > 0 ? high : low
+
+bool btLongOrderAccepted = longSignal and btInDateRange and btEnableLongs and not btDailyLossLocked and btInfrastructureValid and btOrderQty > 0 and strategy.position_size == 0
+bool btShortOrderAccepted = shortSignal and btInDateRange and btEnableShorts and not btDailyLossLocked and btInfrastructureValid and btOrderQty > 0 and strategy.position_size == 0
+if btLongOrderAccepted
+    string longEntryMeta = f_order_meta("ENTRY", "LONG", setupIdText, setupType, setupGrade, btOrderQty, setupStop, setupTp1, btRiskPct * btContextRiskFactor)
+    strategy.entry("MF-L", strategy.long, qty = btOrderQty, comment = "MacroFlow long", alert_message = longEntryMeta)
+    btTp1Filled := false
+    btTrailStop := setupStop
+    btEntryAtr := atr
+    btFavorableExtreme := setupEntry
+    btFrozenQty := btOrderQty
+    btFrozenRiskPct := btRiskPct * btContextRiskFactor
+    diagActiveBucket := f_diag_bucket(setupType, setupGrade, 1)
+    diagActivePnl := 0.0
+    diagActiveCommission := 0.0
+    diagActiveSlices := 0
+    diagClosedCursor := strategy.closedtrades
+    diagNetProfitCursor := strategy.netprofit
+    planClosedTradesStart := strategy.closedtrades
+    planFillObserved := false
+    planDirection := 1
+    // Seed the plan at order acceptance so a first-bar close cannot disappear
+    // from plan-complete attribution. Actual broker-emulator fills reconcile it.
+    planEntryPriceActual := setupEntry
+    planEntryBarActual := bar_index
+    planEntryTimeActual := time_close
+    planInitialRiskPrice := math.abs(setupEntry - setupStop)
+    planInitialQty := btOrderQty
+    planLastOpenNotional := strategy.convert_to_account(btOrderQty * setupEntry * btEffectivePointValue)
+    planMfePrice := 0.0
+    planMaePrice := 0.0
+    planClosedMfeR := 0.0
+    planClosedMaeR := 0.0
+    planFundingCost := 0.0
+    planSlippageCost := 0.0
+    planPriorLastUsedLongSetup := priorLastUsedLongSetup
+    planPriorLastUsedShortSetup := na
+    int longFundingMs = fundingIntervalHours * 60 * 60 * 1000
+    planLastFundingBucket := int(time_close / longFundingMs)
+if btShortOrderAccepted
+    string shortEntryMeta = f_order_meta("ENTRY", "SHORT", setupIdText, setupType, setupGrade, btOrderQty, setupStop, setupTp1, btRiskPct * btContextRiskFactor)
+    strategy.entry("MF-S", strategy.short, qty = btOrderQty, comment = "MacroFlow short", alert_message = shortEntryMeta)
+    btTp1Filled := false
+    btTrailStop := setupStop
+    btEntryAtr := atr
+    btFavorableExtreme := setupEntry
+    btFrozenQty := btOrderQty
+    btFrozenRiskPct := btRiskPct * btContextRiskFactor
+    diagActiveBucket := f_diag_bucket(setupType, setupGrade, -1)
+    diagActivePnl := 0.0
+    diagActiveCommission := 0.0
+    diagActiveSlices := 0
+    diagClosedCursor := strategy.closedtrades
+    diagNetProfitCursor := strategy.netprofit
+    planClosedTradesStart := strategy.closedtrades
+    planFillObserved := false
+    planDirection := -1
+    planEntryPriceActual := setupEntry
+    planEntryBarActual := bar_index
+    planEntryTimeActual := time_close
+    planInitialRiskPrice := math.abs(setupEntry - setupStop)
+    planInitialQty := btOrderQty
+    planLastOpenNotional := strategy.convert_to_account(btOrderQty * setupEntry * btEffectivePointValue)
+    planMfePrice := 0.0
+    planMaePrice := 0.0
+    planClosedMfeR := 0.0
+    planClosedMaeR := 0.0
+    planFundingCost := 0.0
+    planSlippageCost := 0.0
+    planPriorLastUsedLongSetup := na
+    planPriorLastUsedShortSetup := priorLastUsedShortSetup
+    int shortFundingMs = fundingIntervalHours * 60 * 60 * 1000
+    planLastFundingBucket := int(time_close / shortFundingMs)
+// A signal filtered only by tester settings must not occupy MacroFlow's plan
+// state or suppress later valid trades.
+if longSignal and not btLongOrderAccepted
+    activeDirection := 0
+    entryBar := na
+    setupTp1Hit := false
+    setupTp2Hit := false
+    lastUsedLongSetup := priorLastUsedLongSetup
+if shortSignal and not btShortOrderAccepted
+    activeDirection := 0
+    entryBar := na
+    setupTp1Hit := false
+    setupTp2Hit := false
+    lastUsedShortSetup := priorLastUsedShortSetup
+
+float btCostBreakevenOffset = setupEntry * executionRate * 2.0 + breakevenOffsetTicks * syminfo.mintick
+float btLongBreakeven = math.min(setupTp1 - syminfo.mintick, setupEntry + btCostBreakevenOffset)
+float btShortBreakeven = math.max(setupTp1 + syminfo.mintick, setupEntry - btCostBreakevenOffset)
+if strategy.position_size > 0 and btTp1Filled and barstate.isconfirmed
+    btFavorableExtreme := math.max(nz(btFavorableExtreme, high), high)
+    float longTrailDistance = math.max(atr, nz(btEntryAtr, atr) * 0.75) * trailAtrMult
+    float longTrailCandidate = btFavorableExtreme - longTrailDistance
+    btTrailStop := useAtrTrail ? math.max(nz(btTrailStop, setupStop), btLongBreakeven, longTrailCandidate) : btLongBreakeven
+if strategy.position_size < 0 and btTp1Filled and barstate.isconfirmed
+    btFavorableExtreme := math.min(nz(btFavorableExtreme, low), low)
+    float shortTrailDistance = math.max(atr, nz(btEntryAtr, atr) * 0.75) * trailAtrMult
+    float shortTrailCandidate = btFavorableExtreme + shortTrailDistance
+    btTrailStop := useAtrTrail ? math.min(nz(btTrailStop, setupStop), btShortBreakeven, shortTrailCandidate) : btShortBreakeven
+float btManagedStop = btTp1Filled ? btTrailStop : setupStop
+string btLongTp1Meta = f_order_meta("EXIT_TP1_OR_SL", "LONG", setupIdText, setupType, setupGrade, nz(btFrozenQty, 0.0) * tp1Share, btManagedStop, setupTp1, nz(btFrozenRiskPct, btRiskPct))
+string btLongTp2Meta = f_order_meta("EXIT_TP2_OR_SL", "LONG", setupIdText, setupType, setupGrade, nz(btFrozenQty, 0.0) * tp2Share, btManagedStop, setupTp2, nz(btFrozenRiskPct, btRiskPct))
+string btLongTp3Meta = f_order_meta("EXIT_TP3_OR_TRAIL", "LONG", setupIdText, setupType, setupGrade, nz(btFrozenQty, 0.0) * tp3Share, btManagedStop, setupTp3, nz(btFrozenRiskPct, btRiskPct))
+string btShortTp1Meta = f_order_meta("EXIT_TP1_OR_SL", "SHORT", setupIdText, setupType, setupGrade, nz(btFrozenQty, 0.0) * tp1Share, btManagedStop, setupTp1, nz(btFrozenRiskPct, btRiskPct))
+string btShortTp2Meta = f_order_meta("EXIT_TP2_OR_SL", "SHORT", setupIdText, setupType, setupGrade, nz(btFrozenQty, 0.0) * tp2Share, btManagedStop, setupTp2, nz(btFrozenRiskPct, btRiskPct))
+string btShortTp3Meta = f_order_meta("EXIT_TP3_OR_TRAIL", "SHORT", setupIdText, setupType, setupGrade, nz(btFrozenQty, 0.0) * tp3Share, btManagedStop, setupTp3, nz(btFrozenRiskPct, btRiskPct))
+if activeDirection == 1
+    if tp1Share > 0 and not setupTp1Hit
+        strategy.exit("MF-L-TP1", "MF-L", stop = btManagedStop, limit = setupTp1, qty_percent = tp1Share * 100.0, alert_message = btLongTp1Meta)
+    if tp2Share > 0 and not setupTp2Hit
+        strategy.exit("MF-L-TP2", "MF-L", stop = btManagedStop, limit = setupTp2, qty_percent = tp2Share * 100.0, alert_message = btLongTp2Meta)
+    if tp3Share > 0
+        strategy.exit("MF-L-TP3", "MF-L", stop = btManagedStop, limit = setupTp3, qty_percent = tp3Share * 100.0, alert_message = btLongTp3Meta)
+if activeDirection == -1
+    if tp1Share > 0 and not setupTp1Hit
+        strategy.exit("MF-S-TP1", "MF-S", stop = btManagedStop, limit = setupTp1, qty_percent = tp1Share * 100.0, alert_message = btShortTp1Meta)
+    if tp2Share > 0 and not setupTp2Hit
+        strategy.exit("MF-S-TP2", "MF-S", stop = btManagedStop, limit = setupTp2, qty_percent = tp2Share * 100.0, alert_message = btShortTp2Meta)
+    if tp3Share > 0
+        strategy.exit("MF-S-TP3", "MF-S", stop = btManagedStop, limit = setupTp3, qty_percent = tp3Share * 100.0, alert_message = btShortTp3Meta)
+
+if activePlanExpired
+    strategy.close("MF-L", comment = "Plan timeout", alert_message = f_order_meta("CLOSE_TIMEOUT", "LONG", setupIdText, setupType, setupGrade, math.abs(strategy.position_size), btManagedStop, na, nz(btFrozenRiskPct, btRiskPct)))
+    strategy.close("MF-S", comment = "Plan timeout", alert_message = f_order_meta("CLOSE_TIMEOUT", "SHORT", setupIdText, setupType, setupGrade, math.abs(strategy.position_size), btManagedStop, na, nz(btFrozenRiskPct, btRiskPct)))
+if modelSessionReset and strategy.position_size != 0
+    strategy.close("MF-L", comment = "Session reset", alert_message = f_order_meta("CLOSE_SESSION", "LONG", setupIdText, setupType, setupGrade, math.abs(strategy.position_size), btManagedStop, na, nz(btFrozenRiskPct, btRiskPct)))
+    strategy.close("MF-S", comment = "Session reset", alert_message = f_order_meta("CLOSE_SESSION", "SHORT", setupIdText, setupType, setupGrade, math.abs(strategy.position_size), btManagedStop, na, nz(btFrozenRiskPct, btRiskPct)))
+if not btInDateRange and strategy.position_size != 0
+    strategy.close_all(comment = "Outside test range", alert_message = f_order_meta("CLOSE_RANGE", strategy.position_size > 0 ? "LONG" : "SHORT", setupIdText, setupType, setupGrade, math.abs(strategy.position_size), btManagedStop, na, nz(btFrozenRiskPct, btRiskPct)))
+bool unusedLongWatch = na(lastWatchedLongSetup) or currentLongSetupId != lastWatchedLongSetup
+bool unusedShortWatch = na(lastWatchedShortSetup) or currentShortSetupId != lastWatchedShortSetup
+bool longWatchEligible = barstate.isconfirmed and not longSignal and not shortSignal and activeDirection == 0 and cooldownReady and not eventBlocked and technicalDataReady and longStopValid and not na(longNetRR) and not na(longCostLoad) and longWatchPattern and longGrade == "C" and unusedLongWatch
+bool shortWatchEligible = barstate.isconfirmed and not longSignal and not shortSignal and activeDirection == 0 and cooldownReady and not eventBlocked and technicalDataReady and shortStopValid and not na(shortNetRR) and not na(shortCostLoad) and shortWatchPattern and shortGrade == "C" and unusedShortWatch
+bool longWatchEvent = longWatchEligible and (not shortWatchEligible or longAuditScore >= shortAuditScore)
+bool shortWatchEvent = shortWatchEligible and not longWatchEvent
+if longWatchEvent
+    lastWatchedLongSetup := currentLongSetupId
+    watchDirection := 1
+    watchBar := bar_index
+    watchSetupId := currentLongSetupId
+    watchType := longSetupType
+    watchIdText := currentLongIdText
+    watchEntry := close
+    watchStop := longCandidateStop
+    watchTp1 := close + longRisk * safeTp1R
+    watchTp2 := close + longRisk * safeTp2R
+    watchTp3 := close + longRisk * safeTp3R
+    watchNetRR := longNetRR
+    watchAuditScore := longAuditScore
+    watchPatternEvidence := longPatternQuality
+    watchVolumeEvidence := longObservedVolumeQuality
+if shortWatchEvent
+    lastWatchedShortSetup := currentShortSetupId
+    watchDirection := -1
+    watchBar := bar_index
+    watchSetupId := currentShortSetupId
+    watchType := shortSetupType
+    watchIdText := currentShortIdText
+    watchEntry := close
+    watchStop := shortCandidateStop
+    watchTp1 := close - shortRisk * safeTp1R
+    watchTp2 := close - shortRisk * safeTp2R
+    watchTp3 := close - shortRisk * safeTp3R
+    watchNetRR := shortNetRR
+    watchAuditScore := shortAuditScore
+    watchPatternEvidence := shortPatternQuality
+    watchVolumeEvidence := shortObservedVolumeQuality
+
+string openingState = inOpeningRange ? "Construyendo" : useOpeningRange and not openingFresh ? "Caja vencida" : retestLong ? "Retesteo long" : retestShort ? "Retesteo short" : acceptLong ? "Aceptación long" : acceptShort ? "Aceptación short" : falseBreakLong ? "Falso quiebre long" : falseBreakShort ? "Falso quiebre short" : openingDirection == 1 ? "Ruptura long" : openingDirection == -1 ? "Ruptura short" : openingReady ? "Dentro/rango" : "N/D"
+int candidateDirection = longWatchPattern and not shortWatchPattern ? 1 : shortWatchPattern and not longWatchPattern ? -1 : longWatchPattern and shortWatchPattern ? (longAuditScore >= shortAuditScore ? 1 : -1) : 0
+float btNextSuggestedQty = activeDirection != 0 ? nz(btFrozenQty, 0.0) : candidateDirection == 1 ? btLongSuggestedQty : candidateDirection == -1 ? btShortSuggestedQty : math.min(btLongSuggestedQty, btShortSuggestedQty)
+string candidateGrade = candidateDirection == 1 ? longGrade : candidateDirection == -1 ? shortGrade : "-"
+float candidateNetRR = candidateDirection == 1 ? longNetRR : candidateDirection == -1 ? shortNetRR : na
+float candidateAuditScore = candidateDirection == 1 ? longAuditScore : candidateDirection == -1 ? shortAuditScore : na
+bool candidateGate = candidateDirection == 1 ? unusedLongSetup and (longGrade == "A" or longGrade == "B") : candidateDirection == -1 ? unusedShortSetup and (shortGrade == "A" or shortGrade == "B") : false
+string currentGrade = activeDirection != 0 ? setupGrade : watchDirection != 0 ? "C" : candidateGrade
+string horizon = mode == "Custom" ? "CUSTOM/" + str.upper(customGateMode) : gateMode == "Swing" ? "SWING" : gateMode == "Intraday" ? "INTRADÍA" : "SCALP"
+string action = btLongOrderAccepted ? "ENTRADA LONG " + setupGrade : btShortOrderAccepted ? "ENTRADA SHORT " + setupGrade : longSignal or shortSignal ? "SEÑAL NO EJECUTABLE" : activeDirection == 1 and setupTp2Hit ? "PLAN LONG · TP2 · SL BE" : activeDirection == -1 and setupTp2Hit ? "PLAN SHORT · TP2 · SL BE" : activeDirection == 1 and setupTp1Hit ? "PLAN LONG · TP1 · SL BE" : activeDirection == -1 and setupTp1Hit ? "PLAN SHORT · TP1 · SL BE" : activeDirection == 1 ? "PLAN LONG ACTIVO" : activeDirection == -1 ? "PLAN SHORT ACTIVO" : eventBlocked ? "ESPERAR NOTICIA" : longWatchEvent ? "VIGILAR LONG" : shortWatchEvent ? "VIGILAR SHORT" : watchDirection == 1 ? "VIGILAR LONG" : watchDirection == -1 ? "VIGILAR SHORT" : not technicalDataReady ? "ESPERAR DATOS TÉCNICOS" : not cooldownReady ? "COOLDOWN" : "SIN OPERACIÓN"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Visuals and alerts
+// ─────────────────────────────────────────────────────────────────────────────
+plot(emaFast, "Fast trend estimator", color = color.new(color.aqua, 10), linewidth = 1)
+plot(emaSlow, "Setup trend estimator", color = color.new(color.blue, 20), linewidth = 2)
+plot(trendLongBasis, "Long-trend estimator", color = color.new(color.gray, 75), linewidth = 1)
+plot(operativeVwap, "Operative VWAP", color = color.new(color.orange, 10), linewidth = 2)
+plot(showOpeningRange and useOpeningRange and openingFresh ? openingHigh : na, "Opening high", color = color.new(color.lime, 15), style = plot.style_linebr)
+plot(showOpeningRange and useOpeningRange and openingFresh ? openingLow : na, "Opening low", color = color.new(color.red, 15), style = plot.style_linebr)
+plot(showOpeningRange and useOpeningRange and openingFresh ? (openingHigh + openingLow) / 2.0 : na, "Opening midpoint", color = color.new(color.gray, 50), style = plot.style_linebr)
+plot(showPivots ? lastPivotHigh : na, "Confirmed pivot high", color = color.new(color.red, 55), style = plot.style_stepline)
+plot(showPivots ? lastPivotLow : na, "Confirmed pivot low", color = color.new(color.lime, 55), style = plot.style_stepline)
+plot(showLevels and activeDirection != 0 ? setupEntry : na, "Setup entry", color = color.gray, style = plot.style_linebr)
+plot(showLevels and activeDirection != 0 ? activeStop : na, "Setup stop", color = setupTp1Hit ? color.orange : color.red, style = plot.style_linebr, linewidth = 2)
+plot(showLevels and activeDirection != 0 ? setupTp1 : na, "Setup TP1", color = color.new(color.lime, 55), style = plot.style_linebr)
+plot(showLevels and activeDirection != 0 ? setupTp2 : na, "Setup TP2", color = color.new(color.lime, 30), style = plot.style_linebr)
+plot(showLevels and activeDirection != 0 ? setupTp3 : na, "Setup TP3", color = color.lime, style = plot.style_linebr, linewidth = 2)
+plotshape(btLongOrderAccepted, title = "MacroFlow v0.9.3 REA long", text = "MF LONG", style = shape.labelup, location = location.belowbar, color = color.rgb(0, 170, 105), textcolor = color.white, size = size.tiny)
+plotshape(btShortOrderAccepted, title = "MacroFlow v0.9.3 REA short", text = "MF SHORT", style = shape.labeldown, location = location.abovebar, color = color.rgb(215, 55, 70), textcolor = color.white, size = size.tiny)
+plotshape(showWatchCandidates and longWatchEvent, title = "MacroFlow WATCH long", text = "W↑", style = shape.diamond, location = location.belowbar, color = color.new(color.orange, 15), textcolor = color.white, size = size.tiny)
+plotshape(showWatchCandidates and shortWatchEvent, title = "MacroFlow WATCH short", text = "W↓", style = shape.diamond, location = location.abovebar, color = color.new(color.orange, 15), textcolor = color.white, size = size.tiny)
+barcolor(paintBars ? color.new(f_score_color(microScore), 35) : na)
+bgcolor(eventBlocked ? color.new(color.orange, 84) : na, title = "Economic-event blackout")
+
+bool modelEntryEvent = longSignal or shortSignal
+bool entryEvent = btLongOrderAccepted or btShortOrderAccepted
+bool watchEvent = longWatchEvent or shortWatchEvent
+bool watchPromotionEvent = longSignalFromWatch or shortSignalFromWatch
+if barstate.isconfirmed and cryptoTraditionalClosed and watchEvent
+    closedContextWatchCount += 1
+    int watchAuditDirection = longWatchEvent ? 1 : -1
+    bool watchMtfPass = watchAuditDirection == 1 ? longStrictMtf : shortStrictMtf
+    bool watchPatternPass = watchAuditDirection == 1 ? longEntryPattern : shortEntryPattern
+    bool watchQualityPass = watchAuditDirection == 1 ? longSetupMicroEvidence >= profileMicroB and longTechnicalQuality >= profileTechnicalB and longTechnicalAuditScore >= profileScoreB : shortSetupMicroEvidence >= profileMicroB and shortTechnicalQuality >= profileTechnicalB and shortTechnicalAuditScore >= profileScoreB
+    bool watchCostPass = watchAuditDirection == 1 ? longCostValidB : shortCostValidB
+    if not watchMtfPass
+        closedContextMtfVetoCount += 1
+    else if not watchPatternPass
+        closedContextPatternVetoCount += 1
+    else if not watchQualityPass
+        closedContextQualityVetoCount += 1
+    else if not watchCostPass
+        closedContextCostVetoCount += 1
+if barstate.isconfirmed and cryptoTraditionalClosed and entryEvent
+    closedContextEntryCount += 1
+if barstate.isconfirmed and cryptoTraditionalClosed and watchPromotionEvent
+    closedContextPromotionCount += 1
+bool telemetryEvent = modelEntryEvent or watchEvent
+bool dynamicAlertEvent = entryEvent or (watchEvent and alertWatchCandidates)
+string alertEventName = entryEvent ? "ENTRY" : modelEntryEvent ? "MODEL_SIGNAL" : "WATCH"
+string alertSide = longSignal or longWatchEvent ? "LONG" : "SHORT"
+string alertGrade = modelEntryEvent ? setupGrade : "C"
+string alertType = modelEntryEvent ? setupType : watchType
+string alertId = modelEntryEvent ? setupIdText : watchIdText
+float alertEntry = modelEntryEvent ? setupEntry : watchEntry
+float alertStop = modelEntryEvent ? setupStop : watchStop
+float alertTp1 = modelEntryEvent ? setupTp1 : watchTp1
+float alertTp2 = modelEntryEvent ? setupTp2 : watchTp2
+float alertTp3 = modelEntryEvent ? setupTp3 : watchTp3
+float alertNetRR = modelEntryEvent ? setupNetRR : watchNetRR
+float alertAuditScore = modelEntryEvent ? setupAuditScore : watchAuditScore
+float alertTechnicalQuality = alertSide == "LONG" ? longTechnicalQuality : shortTechnicalQuality
+float alertCostLoad = alertSide == "LONG" ? longCostLoad : shortCostLoad
+float alertDistanceAtr = alertType == "EXT_FADE" ? longTrendDistanceAtr : setupDistanceAtr
+float alertRsi = alertType == "EXT_FADE" ? (alertSide == "LONG" ? lastBullishFadeRsi : lastBearishFadeRsi) : rsiValue
+bool alertFallback = modelEntryEvent and setupFallback
+string fallbackReason = useClosedTechnical ? "CLOSED_US_TECHNICAL" : not fundamentalDataReady and not transmissionDataReady ? "FUND_TRANS_MISSING" : not fundamentalDataReady ? "FUND_MISSING" : not transmissionDataReady ? "TRANS_MISSING" : not transmissionLive ? "TRANS_NOT_LIVE" : "NONE"
+if dynamicAlertEvent and barstate.isconfirmed
+    string safeExperiment = f_json_text(experimentId)
+    string alertMessage = "{\"schema\":\"macroflow.alert.v4\",\"event\":\"" + alertEventName + "\",\"model\":\"" + MODEL_VERSION + "\",\"experiment\":\"" + safeExperiment + "\",\"frequency_profile\":\"" + frequencyProfile + "\",\"symbol\":\"" + chartTicker + "\",\"tf\":\"" + timeframe.period + "\",\"setup_id\":\"" + alertId + "\",\"side\":\"" + alertSide + "\",\"setup_type\":\"" + alertType + "\",\"grade\":\"" + alertGrade + "\",\"fallback\":" + (alertFallback ? "true" : "false") + ",\"fallback_reason\":\"" + (alertFallback ? fallbackReason : "NONE") + "\",\"time_close\":" + str.tostring(time_close) + ",\"entry\":" + f_json_price(alertEntry) + ",\"stop\":" + f_json_price(alertStop) + ",\"tp1\":" + f_json_price(alertTp1) + ",\"tp2\":" + f_json_price(alertTp2) + ",\"tp3\":" + f_json_price(alertTp3) + ",\"suggested_qty\":" + f_json_number(btNextSuggestedQty) + ",\"equity\":" + f_json_number(btEquity) + ",\"risk_pct\":" + f_json_number(btRiskPct * btContextRiskFactor) + ",\"configured_risk_pct\":" + f_json_number(btRiskPct) + ",\"net_rr\":" + f_json_number(alertNetRR) + ",\"gross_target_r\":" + f_json_number(grossWeightedTargetR) + ",\"estimated_cost_price\":" + f_json_price(roundTripCostEstimate) + ",\"cost_load\":" + f_json_number(alertCostLoad) + ",\"audit_score\":" + f_json_number(alertAuditScore) + ",\"technical_quality\":" + f_json_number(alertTechnicalQuality) + ",\"distance_atr\":" + f_json_number(alertDistanceAtr) + ",\"rsi\":" + f_json_number(alertRsi) + ",\"macro\":" + f_json_number(fundamentalScore) + ",\"transmission\":" + f_json_number(transmissionScore) + ",\"asset_transmission\":" + f_json_number(assetTransmissionScore) + ",\"validated_transmission\":" + f_json_number(validatedTransmissionScore) + ",\"micro\":" + f_json_number(microScore) + ",\"mtf\":" + f_json_number(mtfAlignment) + ",\"fundamental_coverage\":" + f_json_number(fundamentalCoverage) + ",\"transmission_coverage\":" + f_json_number(transmissionCoverage) + ",\"micro_coverage\":" + f_json_number(microCoverage) + ",\"trend_estimator\":\"" + f_json_text(trendEstimator) + "\",\"adaptive_hma_weight\":" + f_json_number(adaptiveHmaWeight) + ",\"spy_z\":" + f_json_number(spyZ) + ",\"vix_z\":" + f_json_number(vixZ) + ",\"dxy_z\":" + f_json_number(dxyZ) + ",\"z_risk_class\":\"" + f_json_text(transmissionExtremeState) + "\",\"correlation_reference\":\"" + f_json_text(effectiveCorrelationReference) + "\",\"pearson_r\":" + f_json_number(rawPearsonCorrelation) + ",\"oriented_pearson_r\":" + f_json_number(riskOrientedCorrelation) + ",\"correlation_t\":" + f_json_number(correlationTStat) + ",\"correlation_samples\":" + str.tostring(correlationSampleCount) + ",\"correlation_windows_valid\":" + str.tostring(correlationValidWindows) + ",\"correlation_consensus_sign\":" + str.tostring(correlationConsensusSign) + ",\"correlation_valid\":" + (correlationStatValid ? "true" : "false") + ",\"transmission_live\":" + (transmissionLive ? "true" : "false") + ",\"traditional_context_open\":" + (traditionalContextOpen ? "true" : "false") + ",\"closed_context_policy\":\"" + f_json_text(closedContextPolicy) + "\",\"closed_technical\":" + (useClosedTechnical ? "true" : "false") + ",\"context_decay\":" + f_json_number(closedContextDecay) + ",\"market_preset\":\"" + f_json_text(btEffectivePreset) + "\",\"daily_loss_locked\":" + (btDailyLossLocked ? "true" : "false") + ",\"complete_plans\":" + str.tostring(completePlanCount) + ",\"calendar_blocked\":" + (eventBlocked ? "true" : "false") + "}"
+    alert(alertMessage, alert.freq_once_per_bar_close)
+
+// Hidden audit telemetry is emitted for WATCH and ENTRY. It records plans and
+// model inputs; it does not claim an exchange fill or realized performance.
+var int auditSequence = 0
+if telemetryEvent
+    auditSequence += 1
+int auditEventCode = modelEntryEvent ? 2 : watchEvent ? 1 : 0
+int auditDirection = telemetryEvent ? (alertSide == "LONG" ? 1 : -1) : 0
+int auditGrade = alertGrade == "A" ? 3 : alertGrade == "B" ? 2 : alertGrade == "C" ? 1 : 0
+int auditSetup = alertType == "BREAK" or alertType == "BREAK_WATCH" ? 1 : alertType == "RETEST" ? 2 : alertType == "FALSE_BREAK" ? 3 : alertType == "TREND_PULLBACK" ? 4 : alertType == "ACCEPT" ? 5 : alertType == "PIVOT_BREAK" ? 6 : alertType == "EXT_FADE" ? 7 : 0
+int auditFrequency = frequencyProfile == "Selectivo" ? 1 : frequencyProfile == "Activo" ? 3 : 2
+plot(telemetryEvent ? auditSequence : na, "AUDIT_id", display = display.none)
+plot(telemetryEvent ? auditEventCode : na, "AUDIT_event", display = display.none)
+plot(telemetryEvent ? auditDirection : na, "AUDIT_direction", display = display.none)
+plot(telemetryEvent ? auditSetup : na, "AUDIT_setup", display = display.none)
+plot(telemetryEvent ? auditGrade : na, "AUDIT_grade", display = display.none)
+plot(telemetryEvent ? auditFrequency : na, "AUDIT_frequency_profile", display = display.none)
+plot(telemetryEvent ? alertEntry : na, "AUDIT_signal_close", display = display.none)
+plot(telemetryEvent ? alertStop : na, "AUDIT_stop", display = display.none)
+plot(telemetryEvent ? alertTp1 : na, "AUDIT_tp1", display = display.none)
+plot(telemetryEvent ? alertTp2 : na, "AUDIT_tp2", display = display.none)
+plot(telemetryEvent ? alertTp3 : na, "AUDIT_tp3", display = display.none)
+plot(telemetryEvent ? alertNetRR : na, "AUDIT_net_rr", display = display.none)
+plot(telemetryEvent ? alertAuditScore : na, "AUDIT_score", display = display.none)
+plot(telemetryEvent ? alertTechnicalQuality : na, "AUDIT_technical_quality", display = display.none)
+plot(telemetryEvent ? atr : na, "AUDIT_atr", display = display.none)
+plot(telemetryEvent ? alertDistanceAtr : na, "AUDIT_distance_atr", display = display.none)
+plot(telemetryEvent ? alertRsi : na, "AUDIT_rsi", display = display.none)
+plot(telemetryEvent ? fundamentalScore : na, "AUDIT_macro", display = display.none)
+plot(telemetryEvent ? transmissionScore : na, "AUDIT_transmission", display = display.none)
+plot(telemetryEvent ? microScore : na, "AUDIT_micro", display = display.none)
+plot(telemetryEvent ? totalScore : na, "AUDIT_fusion", display = display.none)
+plot(telemetryEvent ? mtfAlignment : na, "AUDIT_mtf", display = display.none)
+plot(telemetryEvent ? relVolume : na, "AUDIT_relative_volume", display = display.none)
+plot(telemetryEvent ? totalCoverage : na, "AUDIT_coverage", display = display.none)
+plot(telemetryEvent ? openingWidthAtr : na, "AUDIT_opening_width_atr", display = display.none)
+plot(telemetryEvent ? alertCostLoad : na, "AUDIT_cost_load", display = display.none)
+plot(telemetryEvent ? roundTripCostEstimate : na, "AUDIT_cost_price", display = display.none)
+plot(telemetryEvent ? (alertFallback ? 1 : 0) : na, "AUDIT_fallback", display = display.none)
+plot(telemetryEvent ? (transmissionLive ? 1 : 0) : na, "AUDIT_transmission_live", display = display.none)
+plot(telemetryEvent ? rawPearsonCorrelation : na, "AUDIT_pearson_r", display = display.none)
+plot(telemetryEvent ? correlationTStat : na, "AUDIT_correlation_t", display = display.none)
+plot(telemetryEvent ? (correlationStatValid ? 1 : 0) : na, "AUDIT_correlation_valid", display = display.none)
+plot(telemetryEvent ? spyZ : na, "AUDIT_spy_z", display = display.none)
+plot(telemetryEvent ? vixZ : na, "AUDIT_vix_z", display = display.none)
+plot(telemetryEvent ? dxyZ : na, "AUDIT_dxy_z", display = display.none)
+plot(telemetryEvent ? (eventBlocked ? 1 : 0) : na, "AUDIT_calendar_blocked", display = display.none)
+// Exportable completed-plan diagnostics. DIAG_bucket uses codes 1..32; see
+// The deterministic mapping is documented in the v0.9 validation report.
+plot(diagTradeJustClosed ? diagClosedBucketCode : na, "DIAG_closed_bucket", display = display.none)
+plot(diagTradeJustClosed ? diagClosedPlanCommission : na, "DIAG_closed_plan_commission", display = display.none)
+plot(diagTradeJustClosed ? diagClosedPlanAdjustedNet : na, "DIAG_closed_plan_net_adjusted", display = display.none)
+plot(diagTradeJustClosed ? diagClosedPlanFunding : na, "DIAG_closed_plan_funding", display = display.none)
+plot(diagTradeJustClosed ? diagClosedPlanMfeR : na, "DIAG_closed_plan_mfe_R", display = display.none)
+plot(diagTradeJustClosed ? diagClosedPlanMaeR : na, "DIAG_closed_plan_mae_R", display = display.none)
+plot(diagTradeJustClosed ? diagClosedPlanBars : na, "DIAG_closed_plan_bars", display = display.none)
+
+// Consensus is descriptive: available technical, macro and transmission
+// layers vote independently. Risk, calendar, stop and cost remain separate
+// vetoes; missing layers are displayed as N/D and never cast a zero vote.
+bool fundamentalConsensusAvailable = fundamentalDataReady and not useClosedTechnical
+int consensusAvailable = (not na(microScore) ? 1 : 0) + (fundamentalConsensusAvailable ? 1 : 0) + (transmissionScoringAvailable ? 1 : 0)
+int consensusLong = (not na(microScore) and microScore >= 20 ? 1 : 0) + (fundamentalConsensusAvailable and fundamentalScore >= 20 ? 1 : 0) + (transmissionScoringAvailable and validatedTransmissionScore >= 20 ? 1 : 0)
+int consensusShort = (not na(microScore) and microScore <= -20 ? 1 : 0) + (fundamentalConsensusAvailable and fundamentalScore <= -20 ? 1 : 0) + (transmissionScoringAvailable and validatedTransmissionScore <= -20 ? 1 : 0)
+string consensusState = consensusAvailable == 0 ? "N/D" : consensusLong > consensusShort ? "LONG " + str.tostring(consensusLong) + "/" + str.tostring(consensusAvailable) : consensusShort > consensusLong ? "SHORT " + str.tostring(consensusShort) + "/" + str.tostring(consensusAvailable) : "MIXTO " + str.tostring(consensusAvailable) + " capas"
+int riskDirection = activeDirection != 0 ? activeDirection : watchDirection != 0 ? watchDirection : candidateDirection
+bool riskStopValid = riskDirection == 1 ? longStopValid : riskDirection == -1 ? shortStopValid : true
+bool riskCostValid = riskDirection == 1 ? longCostLoad <= effectiveMaxCostLoad : riskDirection == -1 ? shortCostLoad <= effectiveMaxCostLoad : true
+bool riskMtfValid = riskDirection == 1 ? longStrictMtf : riskDirection == -1 ? shortStrictMtf : true
+bool riskClosedVolumeValid = not useClosedTechnical or riskDirection == 0 or (riskDirection == 1 ? longClosedParticipation : shortClosedParticipation)
+bool riskCorrelationValid = useClosedTechnical or correlationGateValid
+string riskState = btDailyLossLocked ? "VETO PÉRDIDA DIARIA" : not btInfrastructureValid ? "VETO PRESET" : closedContextHardBlock ? "VETO CONTEXTO" : eventBlocked ? "VETO NOTICIA" : not technicalDataReady ? "VETO DATOS T" : not riskCorrelationValid ? "VETO CORR 2/3" : not riskMtfValid ? "VETO MTF" : not riskClosedVolumeValid ? "VETO DATOS VOL." : not riskStopValid ? "VETO STOP" : not riskCostValid ? "VETO COSTE" : not cooldownReady ? "VETO COOLDOWN" : "CONTROLES OK"
+
+var table dashboard = table.new(position.bottom_right, 3, 16, border_width = 1)
+if barstate.isfirst
+    table.merge_cells(dashboard, 1, 15, 2, 15)
+if barstate.islast
+    if showDashboard
+        string dataState = not technicalDataReady ? "TÉCNICO N/D" : aDataReady ? "A: CONTEXTO VIVO" : useClosedTechnical ? "A: N/D · B: TÉCNICO" : "A: N/D · B: CONTEXTUAL"
+        float displayedRR = activeDirection != 0 ? setupNetRR : watchDirection != 0 ? watchNetRR : candidateNetRR
+        float displayedScore = activeDirection != 0 ? setupAuditScore : watchDirection != 0 ? watchAuditScore : candidateAuditScore
+        string displayedSetupType = activeDirection != 0 ? setupType : watchDirection != 0 ? watchType : candidateDirection == 1 ? longSetupType : candidateDirection == -1 ? shortSetupType : openingState
+        string gradeState = activeDirection != 0 ? currentGrade + " · Plan" : watchDirection != 0 ? "C · WATCH" : candidateDirection == 0 ? "- · Sin patrón" : currentGrade == "C" ? "C · VIGILAR" : candidateGate and not eventBlocked ? currentGrade + " · Lista" : currentGrade + " · Filtrada"
+        string contextActivity = useClosedTechnical ? traditionalContextState + " · R×" + f_fmt2(btContextRiskFactor) + " · Hist W/E/P " + str.tostring(closedContextWatchCount) + "/" + str.tostring(closedContextEntryCount) + "/" + str.tostring(closedContextPromotionCount) + " · M/P/Q/C " + str.tostring(closedContextMtfVetoCount) + "/" + str.tostring(closedContextPatternVetoCount) + "/" + str.tostring(closedContextQualityVetoCount) + "/" + str.tostring(closedContextCostVetoCount) + " · Exp " + str.tostring(closedContextExpiredWatchCount) : traditionalContextState
+        table.cell(dashboard, 0, 0, "MACROFLOW 0.9.3 VAL", bgcolor = color.rgb(25, 29, 36), text_color = color.white)
+        table.cell(dashboard, 1, 0, experimentId, bgcolor = color.rgb(25, 29, 36), text_color = color.white)
+        table.cell(dashboard, 2, 0, mode + " · " + frequencyProfile, bgcolor = color.rgb(25, 29, 36), text_color = color.white)
+        table.cell(dashboard, 0, 1, "Régimen fund.", text_color = color.white)
+        table.cell(dashboard, 1, 1, f_fmt(fundamentalScore) + " · " + f_grade(fundamentalScore), bgcolor = f_score_color(fundamentalScore), text_color = color.white)
+        table.cell(dashboard, 2, 1, f_regime(fundamentalScore), bgcolor = f_score_color(fundamentalScore), text_color = color.white)
+        table.cell(dashboard, 0, 2, "Transmisión", text_color = color.white)
+        table.cell(dashboard, 1, 2, f_fmt(validatedTransmissionScore), bgcolor = f_score_color(validatedTransmissionScore), text_color = color.white)
+        table.cell(dashboard, 2, 2, f_transmission_state(validatedTransmissionScore), bgcolor = f_score_color(validatedTransmissionScore), text_color = color.white)
+        table.cell(dashboard, 0, 3, "Micro / MTF", text_color = color.white)
+        table.cell(dashboard, 1, 3, f_fmt(microScore) + " / " + f_fmt(mtfAlignment), bgcolor = f_score_color(microScore), text_color = color.white)
+        table.cell(dashboard, 2, 3, displayedSetupType, text_color = color.white)
+        table.cell(dashboard, 0, 4, "Consenso / Riesgo", text_color = color.white)
+        table.cell(dashboard, 1, 4, consensusState, bgcolor = color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 2, 4, riskState, bgcolor = riskState == "CONTROLES OK" ? color.rgb(48, 52, 61) : color.rgb(150, 75, 35), text_color = color.white)
+        table.cell(dashboard, 0, 5, "Score / Grado", text_color = color.white)
+        table.cell(dashboard, 1, 5, f_fmt(displayedScore), bgcolor = na(displayedScore) ? color.rgb(75, 79, 88) : displayedScore >= profileScoreA ? color.rgb(0, 130, 90) : displayedScore >= profileScoreB ? color.rgb(130, 105, 35) : color.rgb(130, 55, 55), text_color = color.white)
+        table.cell(dashboard, 2, 5, gradeState, bgcolor = currentGrade == "A" ? color.rgb(0, 130, 90) : currentGrade == "B" ? color.rgb(130, 105, 35) : currentGrade == "C" ? color.rgb(130, 55, 55) : color.rgb(75, 79, 88), text_color = color.white)
+        table.cell(dashboard, 0, 6, "Vol. / Caja", text_color = color.white)
+        table.cell(dashboard, 1, 6, f_fmt2(relVolume) + "x", bgcolor = color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 2, 6, openingState, text_color = color.white)
+        table.cell(dashboard, 0, 7, "Datos / Calendario", text_color = color.white)
+        table.cell(dashboard, 1, 7, dataState, bgcolor = technicalDataReady ? color.rgb(48, 52, 61) : color.rgb(130, 55, 55), text_color = color.white)
+        table.cell(dashboard, 2, 7, eventBlocked ? activeEvent : shockProxy, bgcolor = eventBlocked ? color.rgb(190, 112, 25) : color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 0, 8, "R:R neto / Coste", text_color = color.white)
+        table.cell(dashboard, 1, 8, f_fmt2(displayedRR), bgcolor = na(displayedRR) ? color.rgb(75, 79, 88) : displayedRR >= effectiveMinNetRRA ? color.rgb(0, 130, 90) : displayedRR >= effectiveMinNetRRB ? color.rgb(130, 105, 35) : color.rgb(130, 55, 55), text_color = color.white)
+        table.cell(dashboard, 2, 8, f_fmt2(riskDirection == -1 ? shortCostLoad : longCostLoad) + " carga", text_color = color.white)
+        table.cell(dashboard, 0, 9, "ATR / Qty", text_color = color.white)
+        table.cell(dashboard, 1, 9, str.tostring(atr, format.mintick), bgcolor = color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 2, 9, str.tostring(btNextSuggestedQty) + " contratos", bgcolor = color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 0, 10, "Z SPY/VIX/DXY", text_color = color.white)
+        table.cell(dashboard, 1, 10, f_fmt2(spyZ) + " / " + f_fmt2(vixZ) + " / " + f_fmt2(dxyZ), bgcolor = transmissionExtremeVote > 0 ? color.rgb(0, 115, 80) : transmissionExtremeVote < 0 ? color.rgb(145, 45, 60) : color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 2, 10, transmissionExtremeState, bgcolor = transmissionExtremeVote > 0 ? color.rgb(0, 115, 80) : transmissionExtremeVote < 0 ? color.rgb(145, 45, 60) : color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 0, 11, "Pearson " + effectiveCorrelationReference + (useClosedTechnical ? " (obs.)" : ""), text_color = color.white)
+        table.cell(dashboard, 1, 11, "r " + f_fmt2(rawPearsonCorrelation) + " · t " + f_fmt2(correlationTStat) + " · N" + str.tostring(correlationSampleCount), bgcolor = useClosedTechnical ? color.rgb(75, 79, 88) : correlationStatValid ? color.rgb(0, 115, 80) : color.rgb(145, 45, 60), text_color = color.white)
+        table.cell(dashboard, 2, 11, useClosedTechnical ? "OBSERVACIÓN" : correlationStatValid ? str.tostring(correlationConsensusCount) + "/3 " + (correlationConsensusSign > 0 ? "+" : "−") : correlationConsistencyReady ? str.tostring(correlationConsensusCount) + "/3 · NO" : "CALENTANDO", bgcolor = useClosedTechnical ? color.rgb(75, 79, 88) : correlationStatValid ? color.rgb(0, 115, 80) : color.rgb(145, 45, 60), text_color = color.white)
+        table.cell(dashboard, 0, 12, "Contexto / Daily", text_color = color.white)
+        table.cell(dashboard, 1, 12, contextActivity, bgcolor = traditionalContextOpen or not chartIsCrypto ? color.rgb(48, 52, 61) : color.rgb(145, 75, 35), text_color = color.white)
+        table.cell(dashboard, 2, 12, str.tostring(btDailyPnl, "#.##") + (btDailyLossLocked ? " · LOCK" : " · OK"), bgcolor = btDailyLossLocked ? color.rgb(145, 45, 60) : color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 0, 13, "Planes / duración", text_color = color.white)
+        table.cell(dashboard, 1, 13, "N " + str.tostring(completePlanCount) + " · " + f_fmt2(averagePlanBars) + " barras", bgcolor = color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 2, 13, "Neto aj. " + str.tostring(completePlanNetSum, "#.##") + " · S/F " + str.tostring(completePlanSlippageSum, "#.##") + "/" + str.tostring(completePlanFundingSum, "#.##"), bgcolor = completePlanNetSum >= 0 ? color.rgb(0, 105, 78) : color.rgb(145, 45, 60), text_color = color.white)
+        table.cell(dashboard, 0, 14, "MFE / MAE / Equity", text_color = color.white)
+        table.cell(dashboard, 1, 14, f_fmt2(averagePlanMfeR) + "R / " + f_fmt2(averagePlanMaeR) + "R · E " + planEfficiencyText, bgcolor = color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 2, 14, str.tostring(btEquity, "#.##") + " · " + btEffectivePreset + (btCapitalDesynchronized ? " · DESYNC" : " · SYNC"), bgcolor = btCapitalDesynchronized or not btInfrastructureValid ? color.rgb(145, 45, 60) : color.rgb(48, 52, 61), text_color = color.white)
+        table.cell(dashboard, 0, 15, "Acción", text_color = color.white)
+        table.cell(dashboard, 1, 15, action, bgcolor = eventBlocked ? color.rgb(190, 112, 25) : btLongOrderAccepted ? color.rgb(0, 120, 80) : btShortOrderAccepted ? color.rgb(165, 45, 60) : longSignal or shortSignal ? color.rgb(130, 55, 55) : longWatchEvent or shortWatchEvent ? color.rgb(160, 105, 25) : color.rgb(70, 74, 82), text_color = color.white)
+    else
+        table.clear(dashboard, 0, 0, 2, 15)
+
+// Exact attribution table. Rows with no completed plan stay hidden so scarce
+// samples remain obvious instead of being mistaken for zero expectancy.
+// The optional research table stays above the operational dashboard so neither
+// panel covers the other. Disable it in the Diagnostic inputs for a clean chart.
+var table diagTable = table.new(position.top_right, 11, 35, border_width = 1)
+if barstate.islast
+    table.clear(diagTable, 0, 0, 10, 34)
+    if diagShowTable
+        color diagHeader = color.rgb(25, 29, 36)
+        color diagBody = color.rgb(48, 52, 61)
+        table.cell(diagTable, 0, 0, "Setup", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 1, 0, "G", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 2, 0, "Lado", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 3, 0, "N", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 4, 0, "Acierto", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 5, 0, "P&L neto", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 6, 0, "Prom.", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 7, 0, "PF", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 8, 0, "MFE/MAE", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 9, 0, "Barras", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 10, 0, "Slip/Fund", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        int diagRow = 1
+        int diagTotalPlans = 0
+        int diagTotalWins = 0
+        float diagTotalPnl = 0.0
+        float diagTotalPositive = 0.0
+        float diagTotalNegative = 0.0
+        float diagTotalMfeR = 0.0
+        float diagTotalMaeR = 0.0
+        int diagTotalExcursionN = 0
+        float diagTotalBars = 0.0
+        float diagTotalFunding = 0.0
+        float diagTotalSlippage = 0.0
+        for setupIndex = 0 to 7
+            for gradeIndex = 0 to 1
+                for sideIndex = 0 to 1
+                    int bucket = setupIndex * 4 + gradeIndex * 2 + sideIndex
+                    int plans = array.get(diagPlanCount, bucket)
+                    int wins = array.get(diagWinCount, bucket)
+                    float pnl = array.get(diagPnlSum, bucket)
+                    float positivePnl = array.get(diagPositivePnl, bucket)
+                    float negativePnl = array.get(diagNegativePnl, bucket)
+                    float mfeRSum = array.get(diagMfeRSum, bucket)
+                    float maeRSum = array.get(diagMaeRSum, bucket)
+                    int excursionN = array.get(diagExcursionCount, bucket)
+                    float barsSum = array.get(diagBarsSum, bucket)
+                    float fundingSum = array.get(diagFundingSum, bucket)
+                    float slippageSum = array.get(diagSlippageSum, bucket)
+                    diagTotalPlans += plans
+                    diagTotalWins += wins
+                    diagTotalPnl += pnl
+                    diagTotalPositive += positivePnl
+                    diagTotalNegative += negativePnl
+                    diagTotalMfeR += mfeRSum
+                    diagTotalMaeR += maeRSum
+                    diagTotalExcursionN += excursionN
+                    diagTotalBars += barsSum
+                    diagTotalFunding += fundingSum
+                    diagTotalSlippage += slippageSum
+                    if plans > 0
+                        float winRate = 100.0 * wins / plans
+                        float averagePnl = pnl / plans
+                        string profitFactor = negativePnl > 0 ? str.tostring(positivePnl / negativePnl, "#.##") : positivePnl > 0 ? "INF" : "N/D"
+                        color pnlColor = pnl > 0 ? color.rgb(0, 115, 80) : pnl < 0 ? color.rgb(145, 45, 60) : diagBody
+                        table.cell(diagTable, 0, diagRow, f_diag_setup_name(setupIndex), bgcolor = diagBody, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 1, diagRow, gradeIndex == 0 ? "A" : "B", bgcolor = diagBody, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 2, diagRow, sideIndex == 0 ? "LONG" : "SHORT", bgcolor = diagBody, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 3, diagRow, str.tostring(plans), bgcolor = diagBody, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 4, diagRow, str.tostring(winRate, "#.0") + "%", bgcolor = diagBody, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 5, diagRow, str.tostring(pnl, "#.##"), bgcolor = pnlColor, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 6, diagRow, str.tostring(averagePnl, "#.##"), bgcolor = pnlColor, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 7, diagRow, profitFactor, bgcolor = pnlColor, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 8, diagRow, excursionN > 0 ? str.tostring(mfeRSum / excursionN, "#.##") + "/" + str.tostring(maeRSum / excursionN, "#.##") : "N/D", bgcolor = diagBody, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 9, diagRow, str.tostring(barsSum / plans, "#.0"), bgcolor = diagBody, text_color = color.white, text_size = size.tiny)
+                        table.cell(diagTable, 10, diagRow, str.tostring(slippageSum, "#.##") + "/" + str.tostring(fundingSum, "#.##"), bgcolor = diagBody, text_color = color.white, text_size = size.tiny)
+                        diagRow += 1
+        float diagTotalWinRate = diagTotalPlans > 0 ? 100.0 * diagTotalWins / diagTotalPlans : na
+        string diagTotalPf = diagTotalNegative > 0 ? str.tostring(diagTotalPositive / diagTotalNegative, "#.##") : diagTotalPositive > 0 ? "INF" : "N/D"
+        color diagTotalColor = diagTotalPnl > 0 ? color.rgb(0, 115, 80) : diagTotalPnl < 0 ? color.rgb(145, 45, 60) : diagHeader
+        table.cell(diagTable, 0, diagRow, "TOTAL", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 1, diagRow, "-", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 2, diagRow, "-", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 3, diagRow, str.tostring(diagTotalPlans), bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 4, diagRow, na(diagTotalWinRate) ? "N/D" : str.tostring(diagTotalWinRate, "#.0") + "%", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 5, diagRow, str.tostring(diagTotalPnl, "#.##"), bgcolor = diagTotalColor, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 6, diagRow, diagTotalPlans > 0 ? str.tostring(diagTotalPnl / diagTotalPlans, "#.##") : "N/D", bgcolor = diagTotalColor, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 7, diagRow, diagTotalPf, bgcolor = diagTotalColor, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 8, diagRow, diagTotalExcursionN > 0 ? str.tostring(diagTotalMfeR / diagTotalExcursionN, "#.##") + "/" + str.tostring(diagTotalMaeR / diagTotalExcursionN, "#.##") : "N/D", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 9, diagRow, diagTotalPlans > 0 ? str.tostring(diagTotalBars / diagTotalPlans, "#.0") : "N/D", bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        table.cell(diagTable, 10, diagRow, str.tostring(diagTotalSlippage, "#.##") + "/" + str.tostring(diagTotalFunding, "#.##"), bgcolor = diagHeader, text_color = color.white, text_size = size.tiny)
+        diagRow += 1
+        // With calc_on_order_fills=false, a market close created on the final
+        // chart bar cannot be observed as closed until another execution. Keep
+        // that plan visible as OPEN/PEND. at mark-to-market, outside totals.
+        if not na(diagActiveBucket)
+            int openSetupIndex = int(math.floor(diagActiveBucket / 4.0))
+            int openRemainder = diagActiveBucket % 4
+            int openGradeIndex = int(math.floor(openRemainder / 2.0))
+            int openSideIndex = openRemainder % 2
+            float openMtmPnl = diagActivePnl + (strategy.netprofit - diagNetProfitCursor) + strategy.openprofit - planSlippageCost - planFundingCost
+            bool closeRequestedThisBar = strategy.position_size != 0 and (activePlanExpired or modelSessionReset or not btInDateRange)
+            string openState = closeRequestedThisBar ? "PEND." : strategy.position_size != 0 ? "OPEN" : "PEND."
+            table.cell(diagTable, 0, diagRow, f_diag_setup_name(openSetupIndex), bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            table.cell(diagTable, 1, diagRow, openGradeIndex == 0 ? "A" : "B", bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            table.cell(diagTable, 2, diagRow, openSideIndex == 0 ? "LONG" : "SHORT", bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            table.cell(diagTable, 3, diagRow, openState, bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            table.cell(diagTable, 4, diagRow, "-", bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            table.cell(diagTable, 5, diagRow, "MTM " + str.tostring(openMtmPnl, "#.##"), bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            table.cell(diagTable, 6, diagRow, "-", bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            table.cell(diagTable, 7, diagRow, "-", bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            float openMfeR = planFillObserved and planInitialRiskPrice > syminfo.mintick ? planMfePrice / planInitialRiskPrice : na
+            float openMaeR = planFillObserved and planInitialRiskPrice > syminfo.mintick ? planMaePrice / planInitialRiskPrice : na
+            int openPlanBars = not na(planEntryBarActual) ? math.max(bar_index - planEntryBarActual, 1) : 0
+            table.cell(diagTable, 8, diagRow, f_fmt2(openMfeR) + "/" + f_fmt2(openMaeR), bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            table.cell(diagTable, 9, diagRow, openPlanBars > 0 ? str.tostring(openPlanBars) : "-", bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+            table.cell(diagTable, 10, diagRow, str.tostring(planSlippageCost, "#.##") + "/" + str.tostring(planFundingCost, "#.##"), bgcolor = color.rgb(100, 80, 30), text_color = color.white, text_size = size.tiny)
+
+
+
+

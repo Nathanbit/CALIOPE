@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "model": "MF-0.9.4-REA-VAL",
+  "experiment": "REA-0065",
+  "source": "source/MacroFlow_Backtest_v0_9_4_VALIDATION.pine",
+  "sha256": "63CFF54E2A36A3A3B5DB2AAA812D0F1BCF70D751D579D566DFB18A26DEA4816C",
+  "inherited_input_count": 136,
+  "request_security_count": 19,
+  "snapshot_date": "2026-10-18",
+  "status": "diagnostic",
+  "profitability_validated": false
+}

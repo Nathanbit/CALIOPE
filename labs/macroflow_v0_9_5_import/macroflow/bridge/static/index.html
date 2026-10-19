@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MacroFlow Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0c0f13; --panel:#12161c; --panel2:#171c24; --line:#232a35; --text:#d7dde6; --muted:#7d8898;
+  --accent:#e8b04a; --ok:#3fbf86; --bad:#e5534b; --warn:#d9a43a; --info:#5aa2e6;
+  --mono:"IBM Plex Mono",ui-monospace,monospace; --sans:"IBM Plex Sans",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans)}
+header{display:flex;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid var(--line);
+  position:sticky;top:0;background:rgba(12,15,19,.94);backdrop-filter:blur(6px);z-index:5;flex-wrap:wrap}
+.brand{font:600 15px var(--mono);letter-spacing:.06em}
+.brand b{color:var(--accent)}
+.pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+.pill{font:500 12px var(--mono);padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.ok{color:var(--ok);border-color:#1f5e44}.pill.bad{color:var(--bad);border-color:#6b2a27}.pill.warn{color:var(--warn);border-color:#6a5222}
+main{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;padding:16px 20px 40px;max-width:1500px;margin:0 auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.c4{grid-column:span 4}.c5{grid-column:span 5}.c7{grid-column:span 7}.c8{grid-column:span 8}.c12{grid-column:span 12}
+@media(max-width:1100px){.c4,.c5,.c7,.c8{grid-column:span 12}}
+h2{margin:0 0 12px;font:600 12px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
+h2 .hint{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400}
+.big{font:600 28px var(--mono)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px}
+.kv span:nth-child(odd){color:var(--muted)}.kv span:nth-child(even){font-family:var(--mono);text-align:right}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.stack{display:flex;flex-direction:column;gap:12px}
+button{font:500 13px var(--sans);background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:8px 14px;cursor:pointer}
+button:hover{border-color:#3a4555}button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--accent);color:#1a1405;border-color:var(--accent);font-weight:600}
+button.danger{color:var(--bad);border-color:#6b2a27}button.good{color:var(--ok);border-color:#1f5e44}
+label{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+input,select{font:13px var(--mono);background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px 9px;min-width:0}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+@media(max-width:600px){main{padding:12px}header{padding:12px}.row>label{flex:1 1 100%}.row>label select,.row>label input{width:100%!important}}
+select{max-width:100%}
+.check{flex-direction:row;align-items:center;gap:6px;color:var(--text)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:var(--muted);font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.06em;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:7px 8px;border-bottom:1px solid #1b212a;font-family:var(--mono);vertical-align:top}
+.scroll{max-height:340px;overflow:auto}
+.tag{display:inline-block;font:600 11px var(--mono);padding:2px 7px;border-radius:4px;background:var(--panel2)}
+.t-filled,.t-closed,.t-active,.t-promoted,.t-candidate_pending{color:var(--ok)}
+.t-blocked,.t-rejected,.t-error,.t-BRAKE{color:var(--bad)}
+.t-skipped,.t-candidate,.t-kept_incumbent,.t-no_new_data,.t-partial{color:var(--warn)}
+.t-retired{color:var(--muted)}
+.muted{color:var(--muted)}.mono{font-family:var(--mono)}
+.gates{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px}
+.gate{border:1px solid var(--line);border-radius:7px;padding:8px 10px;font:12px var(--mono);display:flex;gap:8px;align-items:center}
+.gate.pass{border-color:#1f5e44}.gate.fail{border-color:#6b2a27}
+.dot{width:8px;height:8px;border-radius:50%}.pass .dot{background:var(--ok)}.fail .dot{background:var(--bad)}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+.stat{background:var(--panel2);border-radius:7px;padding:10px}
+.stat .l{font-size:11px;color:var(--muted)}.stat .v{font:600 17px var(--mono)}
+.banner{border-radius:8px;padding:12px 14px;font-size:13.5px;border:1px solid var(--line);background:var(--panel2)}
+.banner.bad{border-color:#6b2a27}.banner.ok{border-color:#1f5e44}.banner.warn{border-color:#6a5222}
+.log{font:12px var(--mono);color:var(--muted);white-space:pre-wrap;max-height:120px;overflow:auto}
+svg text{font-family:var(--mono)}
+.spinner{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite;display:inline-block}
+@keyframes s{to{transform:rotate(360deg)}}
+.toast{position:fixed;right:18px;bottom:18px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 14px;font-size:13px;max-width:420px;opacity:0;transform:translateY(8px);transition:.2s;z-index:10}
+.toast.show{opacity:1;transform:none}
+details summary{cursor:pointer;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">MACRO<b>FLOW</b> · control local</div>
+  <div class="pills" id="pills"></div>
+</header>
+
+<main>
+  <!-- Riesgo -->
+  <section class="card c4 stack">
+    <h2>Riesgo en vivo <span class="hint" id="brokerName"></span></h2>
+    <div><div class="muted" style="font-size:12px">Equity</div><div class="big" id="equity">—</div></div>
+    <div class="kv" id="riskKv"></div>
+    <div class="row">
+      <button class="danger" id="killBtn">Activar kill switch</button>
+      <button id="zeroBtn">Riesgo a 0</button>
+      <button class="good" id="rearmBtn">Rearmar (1.0)</button>
+    </div>
+    <details><summary>Historial de cambios de riesgo</summary><div class="log" id="riskHist"></div></details>
+  </section>
+
+  <!-- Alerta de prueba -->
+  <section class="card c8 stack">
+    <h2>Alerta de prueba <span class="hint">entra por el mismo camino que una alerta de TradingView</span></h2>
+    <div class="form">
+      <label>Ticker<select id="fTicker"><option>BINANCE:BTCUSDT</option><option>BINANCE:ETHUSDT</option><option>BINANCE:SOLUSDT</option></select></label>
+      <label>Acción<select id="fAction"><option>BUY</option><option>SELL</option><option>CLOSE</option></select></label>
+      <label>Grado<select id="fGrade"><option>A</option><option>B</option><option>C</option></select></label>
+      <label>Precio<input id="fPrice" type="number" value="60000" step="any"></label>
+      <label>Stop (% del precio)<input id="fSl" type="number" value="1.5" step="0.1"></label>
+      <label>Riesgo por trade %<input id="fRisk" type="number" value="0.5" step="0.1"></label>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="fTps" checked> TP 1R / 2R / 3R (tramos 50/30/20)</label>
+      <button class="primary" id="sendBtn" style="margin-left:auto">Enviar alerta</button>
+    </div>
+    <div id="alertResult" class="banner" style="display:none"></div>
+  </section>
+
+  <!-- Optimizador -->
+  <section class="card c12 stack">
+    <h2>Bucle de automejora <span class="hint" id="optHint"></span></h2>
+    <div class="row">
+      <label>Datos<select id="oSource"><option value="demo">Sintéticos (llegan barras nuevas en cada ejecución)</option><option value="csv">CSV subido</option></select></label>
+      <label>Trials Optuna por fold<input id="oTrials" type="number" value="30" min="5" max="500" style="width:90px"></label>
+      <label>PF mínimo OOS<input id="oPf" type="number" value="1.10" step="0.05" style="width:90px"></label>
+      <label class="check" style="align-self:flex-end"><input type="checkbox" id="oCi" checked> Exigir IC bootstrap &gt; 0</label>
+      <label class="check" style="align-self:flex-end"><input type="checkbox" id="oAuto"> Auto-aprobar (bloqueado por defecto)</label>
+      <label>Cada (s)<input id="oInterval" type="number" value="3600" min="5" style="width:80px"></label>
+      <label>Máx. iteraciones<input id="oMax" type="number" value="2" min="1" max="20" style="width:80px"></label>
+      <label style="align-self:flex-end">Subir CSV<input type="file" id="oFile" accept=".csv"></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="loopBtn">Iniciar bucle autónomo</button>
+      <button id="runBtn">Una iteración</button>
+      <button id="resetSpaceBtn" title="Vuelve a explorar todo el rango de parámetros">Reiniciar espacio de búsqueda</button>
+      <span id="loopStatus" class="muted mono" style="margin-left:auto"></span>
+    </div>
+    <div id="loopBanner"></div>
+    <div id="histBox"></div>
+    <div id="optBody" class="stack"><div class="muted">Aún no se ha ejecutado ninguna iteración.</div></div>
+    <details><summary>Registro de ejecuciones</summary><div class="log" id="optLog"></div></details>
+  </section>
+
+  <!-- Registro -->
+  <section class="card c5 stack">
+    <h2>Versiones del modelo <span class="hint" id="regHint"></span></h2>
+    <div class="scroll"><table><thead><tr><th>Versión</th><th>Estado</th><th>PF</th><th>E[R]</th><th>n</th><th></th></tr></thead><tbody id="regBody"></tbody></table></div>
+  </section>
+
+  <!-- Journal -->
+  <section class="card c7 stack">
+    <h2>Journal de ejecución <span class="hint">últimas 50</span></h2>
+    <div class="scroll"><table><thead><tr><th>Hora</th><th>Símbolo</th><th>Acción</th><th>Estado</th><th>Volumen</th><th>Detalle</th></tr></thead><tbody id="jBody"></tbody></table></div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 2) => v == null || Number.isNaN(v) ? "—" : (v === Infinity ? "∞" : Number(v).toLocaleString("es", {minimumFractionDigits: d, maximumFractionDigits: d}));
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let state = null, lastReportKey = null;
+
+function toast(msg, ms = 2600) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), ms); }
+async function api(path, opts = {}) {
+  const r = await fetch(path, {headers: opts.body && !(opts.body instanceof FormData) ? {"Content-Type": "application/json"} : {}, ...opts});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : r.statusText);
+  return data;
+}
+const post = (p, b) => api(p, {method: "POST", body: JSON.stringify(b)});
+
+// ---------------- estado y riesgo
+async function loadState() {
+  try { state = await api("/api/state"); } catch (e) { $("pills").innerHTML = `<span class="pill bad">sin conexión</span>`; return; }
+  const s = state, halted = s.risk_multiplier <= 0, dd = s.day_start_equity && s.equity != null ? (s.day_start_equity - s.equity) / s.day_start_equity * 100 : 0;
+  $("pills").innerHTML = [
+    `<span class="pill ${s.kill_switch ? "bad" : "ok"}">${s.kill_switch ? "KILL SWITCH" : "operativo"}</span>`,
+    `<span class="pill ${halted ? "bad" : (s.risk_multiplier < 1 ? "warn" : "ok")}">riesgo ×${fmt(s.risk_multiplier, 2)}</span>`,
+    `<span class="pill">modelo ${esc(s.active_model_version || "0.9.4 (base)")}</span>`,
+    `<span class="pill ${s.autoloop ? "ok" : ""}">bucle ${s.autoloop ? "autónomo" : "parado"}</span>`,
+    `<span class="pill">${esc(s.broker)}</span>`,
+  ].join("");
+  $("brokerName").textContent = s.broker === "paper" ? "broker simulado" : "MetaTrader 5";
+  $("equity").textContent = s.equity == null ? "—" : "$" + fmt(s.equity);
+  $("riskKv").innerHTML = `
+    <span>Multiplicador</span><span>${fmt(s.risk_multiplier)}</span>
+    <span>Motivo de freno</span><span>${esc(s.halted_reason || "—")}</span>
+    <span>Pérdida del día</span><span>${fmt(Math.max(dd, 0))} % / ${fmt(s.max_daily_loss_pct, 1)} %</span>
+    <span>Posiciones abiertas</span><span>${s.open_positions}</span>
+    <span>Versión activa</span><span>${esc(s.active_model_version || "—")}</span>`;
+  $("killBtn").textContent = s.kill_switch ? "Desactivar kill switch" : "Activar kill switch";
+  $("riskHist").textContent = s.history.map(h => `${h.at.slice(0, 19).replace("T", " ")}  ${h.source}  ${h.risk_multiplier != null ? "riesgo×" + h.risk_multiplier : "versión " + h.active_model_version}${h.reason ? "  · " + h.reason : ""}`).join("\n") || "Sin cambios todavía.";
+}
+$("killBtn").onclick = async () => { await post("/api/kill", {on: !state?.kill_switch}); toast(state?.kill_switch ? "Kill switch desactivado" : "Kill switch activado: no se abrirán posiciones"); loadState(); };
+$("zeroBtn").onclick = async () => { await post("/api/risk", {multiplier: 0}); toast("Riesgo a 0"); loadState(); };
+$("rearmBtn").onclick = async () => { await post("/api/risk", {multiplier: 1}); toast("Riesgo rearmado a 1.0"); loadState(); };
+
+// ---------------- alerta de prueba
+$("fAction").onchange = () => { const c = $("fAction").value === "CLOSE"; ["fSl", "fRisk", "fGrade", "fTps"].forEach(i => $(i).disabled = c); };
+$("fTicker").onchange = () => { $("fPrice").value = {"BINANCE:BTCUSDT": 60000, "BINANCE:ETHUSDT": 2500, "BINANCE:SOLUSDT": 150}[$("fTicker").value]; };
+$("sendBtn").onclick = async () => {
+  const b = $("sendBtn"); b.disabled = true;
+  try {
+    const r = await post("/api/test-alert", {ticker: $("fTicker").value, action: $("fAction").value, grade: $("fGrade").value,
+      price: +$("fPrice").value, sl_pct: +$("fSl").value, risk_pct: +$("fRisk").value, with_tps: $("fTps").checked});
+    const box = $("alertResult"); box.style.display = "block";
+    const good = ["filled", "closed"].includes(r.status);
+    box.className = "banner " + (good ? "ok" : (r.status === "blocked" || r.status === "error" ? "bad" : "warn"));
+    box.innerHTML = `<b class="tag t-${esc(r.status)}">${esc(r.status)}</b> &nbsp;` + (r.volume != null
+      ? `${esc(r.symbol)} · volumen ${fmt(r.volume, 2)} en tramos [${(r.legs || []).map(v => fmt(v, 2)).join(", ")}] · riesgo ${fmt(r.risk_pct, 2)} % × ${fmt(r.risk_multiplier, 2)}`
+      : esc(r.reason || r.error || (r.orders ? `${r.orders.length} órdenes cerradas` : "")));
+  } catch (e) { toast("Error: " + e.message, 4000); }
+  b.disabled = false; loadState(); loadJournal();
+};
+
+// ---------------- journal
+async function loadJournal() {
+  const rows = await api("/api/journal").catch(() => []);
+  $("jBody").innerHTML = rows.map(r => `<tr>
+    <td>${r.ts ? new Date(r.ts).toLocaleTimeString("es", {hour12: false}) : "—"}</td><td>${esc(r.symbol)}</td><td>${esc(r.action)}${r.grade ? " · " + esc(r.grade) : ""}</td>
+    <td><span class="tag t-${esc(r.status)}">${esc(r.status)}</span></td><td>${r.volume != null ? fmt(r.volume) : "—"}</td>
+    <td class="muted">${esc(r.reason || r.error || (r.legs ? "tramos " + r.legs.join("/") : r.orders ? r.orders.length + " cierres" : ""))}</td></tr>`).join("")
+    || `<tr><td colspan="6" class="muted">Sin actividad. Envía una alerta de prueba.</td></tr>`;
+}
+
+// ---------------- optimizador
+const GATE_NAMES = {min_trades: "Nº de trades ≥ mínimo", profit_factor: "Profit Factor ≥ umbral", dd_var95: "DD 95 % (Monte Carlo)", p_ruin: "Prob. de ruina", expectancy_ci_positive: "IC bootstrap > 0"};
+const STATUS_TEXT = {
+  promoted: ["ok", "Nueva versión activada."], candidate_pending: ["ok", "Candidato válido: apruébalo en «Versiones del modelo»."],
+  kept_incumbent: ["warn", "El candidato no mejora lo suficiente al modelo activo."], rejected: ["warn", "El candidato no pasa los controles fuera de muestra."],
+  BRAKE: ["bad", "FRENO DE SEGURIDAD: el modelo activo se degradó y el riesgo se puso a 0."], no_new_data: ["warn", "No hay barras nuevas: reutilizar el mismo OOS sería sobreajuste."],
+};
+
+function foldChart(folds) {
+  if (!folds?.length) return "";
+  const W = 760, H = 170, pad = 30, vals = folds.map(f => f.oos_exp_r ?? 0), m = Math.max(0.5, ...vals.map(Math.abs));
+  const bw = (W - pad * 2) / folds.length, y0 = H / 2;
+  const bars = folds.map((f, i) => {
+    const v = f.oos_exp_r ?? 0, h = Math.abs(v) / m * (H / 2 - 18), x = pad + i * bw + 3;
+    return `<rect x="${x}" y="${v >= 0 ? y0 - h : y0}" width="${bw - 6}" height="${Math.max(h, 1)}" rx="2" fill="${v >= 0 ? "var(--ok)" : "var(--bad)"}" opacity=".85"><title>fold ${f.fold}: ${fmt(v, 3)} R · ${f.oos_n} trades</title></rect>
+      <text x="${x + (bw - 6) / 2}" y="${H - 4}" text-anchor="middle" font-size="10" fill="var(--muted)">${f.oos_n}</text>`;
+  }).join("");
+  return `<div><div class="muted" style="font-size:12px;margin-bottom:4px">Esperanza OOS por fold (R) · número bajo cada barra = trades</div>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:200px"><line x1="${pad}" x2="${W - pad}" y1="${y0}" y2="${y0}" stroke="var(--line)"/>
+    <text x="4" y="14" font-size="10" fill="var(--muted)">+${fmt(m, 2)}</text><text x="4" y="${H - 18}" font-size="10" fill="var(--muted)">−${fmt(m, 2)}</text>${bars}</svg></div>`;
+}
+
+function renderReport(j) {
+  const r = j.report;
+  if (!r) return;
+  const [cls, txt] = STATUS_TEXT[r.status] || ["", r.status];
+  const c = r.candidate, inc = r.incumbent;
+  let html = `<div class="banner ${cls}"><b class="tag t-${esc(r.status)}">${esc(r.status)}</b> &nbsp;${esc(txt)}<div class="muted" style="margin-top:4px">${esc(r.message)}</div></div>`;
+  if (c) {
+    const st = c.stats, ci = c.expectancy_ci90, mc = c.monte_carlo || {};
+    html += `<div class="gates">${Object.entries(c.gates).map(([k, v]) => `<div class="gate ${v ? "pass" : "fail"}"><span class="dot"></span>${esc(GATE_NAMES[k] || k)}</div>`).join("")}</div>
+      <div class="stats">
+        <div class="stat"><div class="l">Trades OOS</div><div class="v">${st.n}</div></div>
+        <div class="stat"><div class="l">Profit Factor</div><div class="v">${fmt(st.profit_factor)}</div></div>
+        <div class="stat"><div class="l">Esperanza</div><div class="v">${fmt(st.expectancy_r, 3)} R</div></div>
+        <div class="stat"><div class="l">IC 90 % esperanza</div><div class="v" style="font-size:14px">${fmt(ci[1], 2)} … ${fmt(ci[2], 2)}</div></div>
+        <div class="stat"><div class="l">Win rate</div><div class="v">${fmt(st.win_rate * 100, 1)} %</div></div>
+        <div class="stat"><div class="l">DD 95 % (MC)</div><div class="v">${fmt((mc.dd_var || 0) * 100, 1)} %</div></div>
+        <div class="stat"><div class="l">P(ruina)</div><div class="v">${fmt((mc.p_ruin || 0) * 100, 2)} %</div></div>
+        ${inc ? `<div class="stat"><div class="l">Activo: esperanza</div><div class="v">${fmt(inc.stats.expectancy_r, 3)} R</div></div>` : ""}
+      </div>`;
+    html += foldChart(r.folds);
+    const stab = c.param_stability_cv || {};
+    const unstable = Object.entries(stab).filter(([, v]) => v > 0);
+    html += `<details><summary>Parámetros del candidato y estabilidad entre folds</summary><table style="margin-top:8px"><thead><tr><th>Parámetro</th><th>Valor</th><th>Variación entre folds</th></tr></thead><tbody>
+      ${Object.entries(c.params).filter(([k]) => typeof c.params[k] !== "object").map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(typeof v === "number" ? +v.toFixed(4) : v)}</td>
+      <td>${stab[k] != null ? `<span style="color:${stab[k] > 0.5 ? "var(--bad)" : stab[k] > 0.25 ? "var(--warn)" : "var(--ok)"}">${fmt(stab[k] * 100, 0)} %</span>` : "—"}</td></tr>`).join("")}
+      </tbody></table><div class="muted" style="font-size:12px;margin-top:6px">Variación &gt; 50 %: el óptimo cambia mucho de una ventana a otra; probablemente es ruido.</div></details>`;
+    if (r.pine_changes?.length) html += `<div class="banner"><b>.pine v${esc(r.version)}</b>: ${esc(r.pine_changes.join(" · "))} &nbsp;<a style="color:var(--accent)" href="/api/pine/${esc(r.version)}">descargar</a></div>`;
+  }
+  if (r.audit) html += `<div class="banner">Auditoría: horas bloqueadas ${esc(JSON.stringify(r.audit.blocked_hours))}, grados bloqueados ${esc(JSON.stringify(r.audit.blocked_grades))}</div>`;
+  $("optBody").innerHTML = html;
+}
+
+function historyChart(h) {
+  if (!h?.length) return "";
+  const W = 760, H = 150, pad = 34, vals = h.map(x => x.expectancy_r ?? 0), m = Math.max(0.3, ...vals.map(Math.abs));
+  const step = (W - pad * 2) / Math.max(h.length - 1, 1), y = v => H / 2 - v / m * (H / 2 - 26);
+  const pts = h.map((x, i) => [pad + i * step, y(x.expectancy_r ?? 0)]);
+  const col = s => ({promoted: "var(--ok)", candidate_pending: "var(--ok)", BRAKE: "var(--bad)", rejected: "var(--warn)", kept_incumbent: "var(--info)", no_new_data: "var(--muted)"}[s] || "var(--muted)");
+  return `<div><div class="muted" style="font-size:12px;margin-bottom:4px">Esperanza OOS del candidato por iteración (R) · ● verde = nueva versión · ● ámbar = rechazado · ● azul = no mejora al activo · ● rojo = freno</div>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:180px">
+    <line x1="${pad}" x2="${W - pad}" y1="${H / 2}" y2="${H / 2}" stroke="var(--line)"/>
+    <text x="2" y="14" font-size="10" fill="var(--muted)">+${fmt(m, 2)}</text><text x="2" y="${H - 6}" font-size="10" fill="var(--muted)">−${fmt(m, 2)}</text>
+    <polyline fill="none" stroke="var(--accent)" stroke-width="1.5" opacity=".6" points="${pts.map(p => p.join(",")).join(" ")}"/>
+    ${h.map((x, i) => `<circle cx="${pts[i][0]}" cy="${pts[i][1]}" r="${x.version ? 5.5 : 4}" fill="${col(x.status)}"><title>#${x.iteration} ${x.status}${x.version ? " → v" + x.version : ""} · ${fmt(x.expectancy_r, 3)} R · PF ${fmt(x.profit_factor)} · activo ${x.active || "base"}</title></circle>
+      ${x.version ? `<text x="${pts[i][0]}" y="${pts[i][1] - 9}" text-anchor="middle" font-size="9.5" fill="var(--ok)">v${esc(x.version)}</text>` : ""}`).join("")}
+    </svg></div>`;
+}
+
+let lastHistLen = -1;
+async function pollOptimizer() {
+  const j = await api("/api/optimizer/status").catch(() => null);
+  if (!j) { setTimeout(pollOptimizer, 4000); return; }
+  const loopOn = j.loop_active && j.running;
+  $("loopBtn").textContent = loopOn ? "Detener bucle" : "Iniciar bucle autónomo";
+  $("loopBtn").className = loopOn ? "danger" : "primary";
+  $("runBtn").disabled = j.busy || loopOn;
+  $("runBtn").innerHTML = j.busy && !loopOn ? `<span class="spinner"></span> Optimizando…` : "Una iteración";
+  $("loopStatus").innerHTML = j.busy ? `<span class="spinner"></span> iteración ${j.iterations + 1} en curso`
+    : loopOn ? `próxima iteración en ${j.seconds_to_next ?? "…"} s · ${j.iterations} hechas` : `${j.iterations} iteraciones · bucle parado`;
+  $("loopBanner").innerHTML = j.stop_reason && !loopOn ? `<div class="banner ${j.stop_reason.startsWith("FRENO") ? "bad" : "warn"}">Bucle parado: ${esc(j.stop_reason)}</div>` : "";
+  $("optHint").textContent = loopOn ? "AUTÓNOMO" : "";
+  $("optLog").textContent = j.log.join("\n") || "—";
+  if (j.history.length !== lastHistLen) { lastHistLen = j.history.length; $("histBox").innerHTML = historyChart(j.history); }
+  if (j.error && !j.busy) $("optBody").innerHTML = `<div class="banner bad"><pre style="margin:0;white-space:pre-wrap">${esc(j.error)}</pre></div>`;
+  const key = j.finished_at + j.iterations;
+  if (!j.busy && j.report && !j.error && key !== lastReportKey) { lastReportKey = key; renderReport(j); loadRegistry(); loadState(); }
+  setTimeout(pollOptimizer, j.busy ? 1200 : 2500);
+}
+const runBody = () => ({source: $("oSource").value, trials: +$("oTrials").value, min_oos_pf: +$("oPf").value,
+  require_positive_ci: $("oCi").checked, auto_approve: $("oAuto").checked, interval_s: +$("oInterval").value, max_iterations: +$("oMax").value});
+$("runBtn").onclick = async () => {
+  try {
+    await post("/api/optimizer/run", runBody());
+    $("runBtn").disabled = true; $("runBtn").innerHTML = `<span class="spinner"></span> Optimizando…`;
+    $("optBody").innerHTML = `<div class="muted">Walk-forward en curso: Optuna optimiza cada ventana de entrenamiento y mide en la siguiente…</div>`;
+  } catch (e) { toast("Error: " + e.message, 4000); }
+};
+$("loopBtn").onclick = async () => {
+  try {
+    if ($("loopBtn").textContent.startsWith("Detener")) { await post("/api/loop/stop", {}); toast("Bucle detenido"); }
+    else { await post("/api/loop/start", runBody()); toast("Bucle autónomo en marcha: seguirá solo, también tras reiniciar el servidor"); }
+  } catch (e) { toast("Error: " + e.message, 4000); }
+};
+$("resetSpaceBtn").onclick = async () => { await post("/api/loop/reset-space", {}); toast("Espacio de búsqueda reiniciado"); };
+$("oFile").onchange = async () => {
+  const f = $("oFile").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  try { const r = await api("/api/optimizer/upload", {method: "POST", body: fd}); $("oSource").value = "csv"; toast(`CSV cargado: ${r.rows} filas`); }
+  catch (e) { toast("CSV rechazado: " + e.message, 5000); $("oFile").value = ""; }
+};
+
+// ---------------- registro
+async function loadRegistry() {
+  const r = await api("/api/registry").catch(() => null);
+  if (!r) return;
+  $("regHint").textContent = r.last_data_end ? `datos hasta ${r.last_data_end.slice(0, 16)}` : "";
+  $("regBody").innerHTML = r.versions.map(v => `<tr>
+    <td>v${esc(v.version)}</td><td><span class="tag t-${esc(v.status)}">${esc(v.status)}</span></td>
+    <td>${fmt(v.profit_factor)}</td><td>${fmt(v.expectancy_r, 3)}</td><td>${v.n ?? "—"}</td>
+    <td style="white-space:nowrap">${v.status === "candidate" ? `<button class="good" style="padding:4px 10px" data-approve="${esc(v.version)}">Aprobar</button>` : ""}
+    <a style="color:var(--accent);margin-left:6px" href="/api/pine/${esc(v.version)}">.pine</a></td></tr>`).join("")
+    || `<tr><td colspan="6" class="muted">Ninguna versión registrada. Activa: 0.9.4 (base).</td></tr>`;
+  document.querySelectorAll("[data-approve]").forEach(b => b.onclick = async () => {
+    if (!confirm(`¿Activar v${b.dataset.approve}? El puente rechazará alertas de cualquier otra versión del .pine.`)) return;
+    await post("/api/approve", {version: b.dataset.approve}); toast(`v${b.dataset.approve} activa. Pega el nuevo .pine en TradingView.`, 4500);
+    loadRegistry(); loadState();
+  });
+}
+
+loadState(); loadJournal(); loadRegistry(); pollOptimizer();
+setInterval(() => { loadState(); loadJournal(); }, 3000);
+</script>
+</body>
+</html>

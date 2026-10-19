@@ -1,0 +1,43 @@
+name: macroflow_structural_validation
+version: 1
+mode: advisory_only
+project: projects/macroflow
+
+inputs:
+  source: source/MacroFlow_Backtest_v0_9_4_VALIDATION.pine
+  evidence: evidence/
+  market_context: public_data_only
+
+agents:
+  - id: pine_causality
+    objective: Detectar repaint, mezclas de estado y errores de Pine v6.
+    output: reviews/pine_causality.md
+  - id: execution_risk
+    objective: Auditar sizing, stop, objetivos, costes y drawdown.
+    output: reviews/execution_risk.md
+  - id: statistics
+    objective: Diseñar validación walk-forward y controlar selection bias.
+    output: reviews/statistics.md
+  - id: market_context
+    objective: Verificar sesiones, feriados y eventos con fuentes trazables.
+    output: reviews/market_context.md
+  - id: adversarial
+    objective: Buscar escenarios que invaliden el cambio propuesto.
+    output: reviews/adversarial.md
+
+gates:
+  - pine_v6_compiles
+  - no_new_repaint_path
+  - inherited_inputs_preserved
+  - security_calls_remain_confirmed
+  - plan_identity_preserved
+  - same_symbol_timeframe_range_and_costs
+  - no_profitability_claim_below_30_complete_plans_per_bucket
+  - no_live_order_execution
+
+deliverables:
+  - candidate_source
+  - change_log
+  - test_report
+  - evidence_ledger
+  - market_context_report

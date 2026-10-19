@@ -1,0 +1,23 @@
+MACROFLOW v0.9.3 — REVISIÓN MULTIMODELO
+
+Contexto común:
+- Pine Script v6, BTCUSDT 1m, contexto tradicional cerrado.
+- v0.9.2: 103 WATCH, 0 entradas.
+- v0.9.3 permitió promoción durante maxWatchBars: una prueba previa produjo 4 cortos, 0 ganadores, P&L -23.95 USD, PF 0; la recarga actual 11–18 oct muestra 0 operaciones.
+- La promoción conserva tipo/ID y evidencia de patrón/volumen, pero revalida MTF, micro, coste y stop actuales.
+- Posible defecto: congela watchEntry/watchStop/watchTp*, pero al promover ejecuta con close y reconstruye stop/TP desde long/shortCandidateStop actuales.
+
+PERPLEXITY — datos y fuentes
+Verifica con fuentes oficiales/primarias el contexto de Asia del 18–19 oct 2026 para BTC y activos de riesgo: cierre US del viernes, horarios de Tokio/Seúl/China/Hong Kong, feriados y publicaciones macro chinas. Devuelve solo hechos comprobables, enlaces y qué filtros temporales objetivos conviene usar en un sistema 24/7. Distingue dato, inferencia y limitación.
+
+DEEPSEEK — lógica Pine y causalidad
+Audita esta arquitectura WATCH: patrón confirmado en t0; dentro de N barras se promueve si MTF 3/3, micro, calidad, coste y stop pasan. Actualmente se guarda watchEntry/watchStop/watchTp1/2/3, pero al ejecutar se usa entry=close y un candidateStop/TP recalculado en el bar de promoción. Identifica mezclas de plan, lookahead/repaint, carreras de estado y entradas tardías. Propón el parche mínimo y causal, sin ajustar parámetros a cuatro pérdidas. Incluye pseudocódigo Pine v6.
+
+KIMI — diseño de validación estadística
+Diseña un protocolo compacto para decidir si una promoción WATCH mejora el modelo sin selection bias: unidad plan completo, walk-forward cronológico, purga/embargo, MFE/MAE, costes, buckets por sesión y criterio mínimo de muestra. Explica qué debe rechazarse con solo 4 trades y cómo comparar v0.9.2/0.9.3/futura v0.9.4 sin tocar el tramo final.
+
+QWEN — compilación Pine v6
+Revisa la forma correcta de implementar una promoción WATCH que use niveles congelados. Debe recalcular en el bar de entrada el riesgo restante y RR neto desde close hasta watchStop/watchTp*, exigir close>emaFast>emaSlow para long o close<emaFast<emaSlow para short, limitar drift desde watchEntry en ATR y no repintar. Entrega funciones/expresiones Pine v6 válidas y señala na/división por cero/orden de evaluación.
+
+Z.AI — auditoría adversarial de riesgo y ejecución
+Haz red-team del cambio. Busca escenarios donde una WATCH vieja, dato macro, gap, spread o baja liquidez asiática produzca fill tardío o tamaño erróneo. Propón gates universales, no optimizados: invalidación antes de eventos, shock candle, distancia máxima al trigger, RR neto mínimo, cooldown y riesgo reducido fuera de cash US. Prioriza reducción de drawdown y explica los costes de oportunidad.

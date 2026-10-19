@@ -1,0 +1,22 @@
+{
+  "params": [
+    {"name": "correlationLookback", "kind": "int",   "default": 50,  "hard_low": 20,  "hard_high": 200, "step": 5,    "pine_input": "correlationLookback"},
+    {"name": "minAbsCorrelation",   "kind": "float", "default": 0.1, "hard_low": 0.0, "hard_high": 0.5, "step": 0.05, "pine_input": "minAbsCorrelation"},
+    {"name": "minCorrelationTStat", "kind": "float", "default": 2.0, "hard_low": 1.0, "hard_high": 3.5, "step": 0.1,  "pine_input": "minCorrelationTStat"},
+    {"name": "transNormLen",        "kind": "int",   "default": 100, "hard_low": 50,  "hard_high": 300, "step": 10,   "pine_input": "transNormLen"},
+    {"name": "transExtremeZ",       "kind": "float", "default": 2.0, "hard_low": 1.5, "hard_high": 3.0, "step": 0.1,  "pine_input": "transExtremeZ"},
+    {"name": "fastLen",             "kind": "int",   "default": 20,  "hard_low": 5,   "hard_high": 50,  "step": 1,    "pine_input": "fastLen"},
+    {"name": "slowLen",             "kind": "int",   "default": 50,  "hard_low": 20,  "hard_high": 150, "step": 5,    "pine_input": "slowLen"},
+    {"name": "slAtrMult",           "kind": "float", "default": 2.0, "hard_low": 1.0, "hard_high": 4.0, "step": 0.1,  "pine_input": "slAtrMult"}
+  ],
+  "fixed": {
+    "longTrendLen": 200,
+    "trendEstimator": "HMA blend",
+    "requireCorrelationEvidence": true,
+    "atrLen": 14,
+    "cost_bps": 6.0,
+    "session_tz": "America/New_York",
+    "blocked_hours": [],
+    "blocked_grades": []
+  }
+}

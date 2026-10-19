@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caliope.local/schemas/decision.schema.json",
+  "title": "CALIOPE validation decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "iteration", "baseline_hash", "candidate_hash",
+    "gate_results", "decision", "reasons", "next_tasks", "human_approval_required"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "minLength": 8, "maxLength": 80},
+    "iteration": {"type": "integer", "minimum": 0, "maximum": 2},
+    "baseline_hash": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+    "candidate_hash": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+    "gate_results": {
+      "type": "array", "minItems": 1, "maxItems": 40,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["gate_id", "status", "observed", "threshold", "evidence_refs"],
+        "properties": {
+          "gate_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{3,100}$"},
+          "status": {"enum": ["pass", "fail", "insufficient_data"]},
+          "observed": {},
+          "threshold": {},
+          "evidence_refs": {
+            "type": "array", "minItems": 1,
+            "items": {"type": "string", "minLength": 3, "maxLength": 300}
+          }
+        }
+      }
+    },
+    "decision": {"enum": ["reject", "revise", "human_review"]},
+    "reasons": {
+      "type": "array", "minItems": 1, "maxItems": 10,
+      "items": {"type": "string", "maxLength": 600}
+    },
+    "next_tasks": {
+      "type": "array", "maxItems": 3,
+      "items": {"type": "string", "maxLength": 500}
+    },
+    "human_approval_required": {"const": true},
+    "approval_scope": {
+      "enum": ["none", "merge", "publish", "paper_trade", "live_trade"]
+    }
+  }
+}

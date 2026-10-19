@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caliope.local/schemas/approval.schema.json",
+  "title": "CALIOPE human approval record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "candidate_hash", "scope", "approved",
+    "approved_by", "approved_at", "decision_hash"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "minLength": 8, "maxLength": 80},
+    "candidate_hash": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+    "decision_hash": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+    "scope": {"enum": ["merge", "publish", "paper_trade"]},
+    "approved": {"type": "boolean"},
+    "approved_by": {"type": "string", "minLength": 1, "maxLength": 120},
+    "approved_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "conditions": {
+      "type": "array", "maxItems": 10,
+      "items": {"type": "string", "maxLength": 500}
+    }
+  }
+}
