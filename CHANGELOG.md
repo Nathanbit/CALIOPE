@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 — 2026-10-19
+
+- Completa la primera ronda de ocho revisores externos para MacroFlow v0.9.5.
+- Registra una síntesis de Claude que conserva desacuerdos y prioriza hechos del
+  repositorio sobre afirmaciones de modelos.
+- Añade un índice verificable de respuestas con hashes canónicos y de archivo.
+- Rechaza la promoción de v0.9.5 y mantiene el prototipo en cuarentena.
+- Confirma que publicación, trading y autoaprobación permanecen desactivados.
+
 ## 0.1.0 — 2026-10-18
 
 - Importa el motor original `themis/` sin renombrar sus módulos.

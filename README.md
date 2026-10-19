@@ -104,6 +104,19 @@ Claude/Themis puede ordenar la evidencia y preparar una síntesis, pero no figur
 como noveno voto ni puede saltarse los gates. Los verificadores deterministas
 tienen prioridad sobre cualquier consenso entre modelos.
 
+### Primera consolidación completada
+
+El run `mf-v095-consolidation-20261019` recibió las ocho observaciones y pasó a
+`evidence_merge` con 8 llamadas, 6.440 tokens de entrada, 3.330 de salida y coste
+declarado USD 0. Claude sintetizó la evidencia, conservó los desacuerdos y
+rechazó la promoción del ZIP v0.9.5. El informe público está en
+`projects/macroflow/reviews/AI_CONSOLIDATED_REVIEW_2026-10-19.md` y su índice de
+respuestas en `AI_REVIEW_EVIDENCE_INDEX_2026-10-19.json`.
+
+La decisión `reject` cerró el run en `archived_rejected` y mantiene el
+artefacto en cuarentena. No hay candidata, ejecución automática ni evidencia de
+rentabilidad.
+
 ## Límites y fallo cerrado
 
 Cada manifest fija actualmente estos topes globales: dos iteraciones, dos

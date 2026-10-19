@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0",
+  "run_id": "mf-v095-consolidation-20261019",
+  "iteration": 0,
+  "final_stage": "archived_rejected",
+  "decision": "reject",
+  "decision_hash": "2B66F60414A5F1B66D85D41352D3AE0EBF0B57E18AB9FEA8BA9CB291797CC76F",
+  "baseline_hash": "63CFF54E2A36A3A3B5DB2AAA812D0F1BCF70D751D579D566DFB18A26DEA4816C",
+  "prompt_hash": "A44F5DD1DF09671DB213A3BF1728A9080D80DFDE980D6BEFFC99E9AE97A2E41F",
+  "candidate_count": 0,
+  "reviewer_count": 8,
+  "budget_used": {
+    "calls": 8,
+    "cost_usd": 0.0,
+    "input_tokens": 6440,
+    "output_tokens": 3330
+  },
+  "automatic_publish": false,
+  "automatic_trading": false,
+  "reviewers": [
+    {
+      "agent_id": "deepseek",
+      "role": "execution_and_risk_review",
+      "canonical_response_sha256": "1F20EE28E97921F1363952D681D687B4D76D857B0A36ACA2991D450392B6F0F9",
+      "archived_file_sha256": "A2E17EFD086FFA38BE040C9220D4F327FDAF48810B95AAEFBD8F99B0DD33B33E",
+      "finding_count": 8,
+      "blocker_count": 5,
+      "archived_name": "deepseek-1f20ee28e979.json"
+    },
+    {
+      "agent_id": "gemini",
+      "role": "system_security_test_architecture",
+      "canonical_response_sha256": "3A9FA720A8CBCA817DE8764E34C04D1FE0FDC82D14632B72B48CEC59AE0C2FFB",
+      "archived_file_sha256": "FCBA0A40EE07CA84B60000DE0D555276D8E9B3B7FDE643C9FD856375F8C8BD40",
+      "finding_count": 4,
+      "blocker_count": 2,
+      "archived_name": "gemini-3a9fa720a8cb.json"
+    },
+    {
+      "agent_id": "kimi",
+      "role": "statistical_validation_review",
+      "canonical_response_sha256": "259B1D1ED50B393FE1D1855B669866E7F0C2260E74EAD20EC6FDA0106DE51C51",
+      "archived_file_sha256": "FBE34ED819825F9B1279F112D23F21E5493880093328445594C33D257ED4EE75",
+      "finding_count": 8,
+      "blocker_count": 5,
+      "archived_name": "kimi-259b1d1ed50b.json"
+    },
+    {
+      "agent_id": "meta",
+      "role": "state_machine_races_invariants_rollback",
+      "canonical_response_sha256": "6047D9B71FC3498989A776458057F267A52A3576C644FA6443A14F2FA9BEAE00",
+      "archived_file_sha256": "9A0C90E8196FD44E0D4E7D2CD30EB4332FC94D40740714B8E20E7406552C9F70",
+      "finding_count": 7,
+      "blocker_count": 2,
+      "archived_name": "meta-6047d9b71fc3.json"
+    },
+    {
+      "agent_id": "nvidia_nemotron",
+      "role": "agent_dag_gpu_guardrail_review",
+      "canonical_response_sha256": "FBAE8FAA0642B2BFAEA93871F8EBFAB1A29A11960C23D6897865B0C4C92390CF",
+      "archived_file_sha256": "23E699FA4A70E744DE49A7FB73A3BEAE32F20299D1BB5D4ED5E7E273D1ABBB88",
+      "finding_count": 8,
+      "blocker_count": 3,
+      "archived_name": "nvidia_nemotron-fbae8faa0642.json"
+    },
+    {
+      "agent_id": "perplexity",
+      "role": "market_and_source_verification",
+      "canonical_response_sha256": "D9405390F2112AE1281061E08334E7A57D5786DDF2F2F8DC4C7E294CDDC0282A",
+      "archived_file_sha256": "A1FDE1ACCBBB50A63713F9BCB9FB458DBD3C6EB65E8657CF496C89784BC88127",
+      "finding_count": 8,
+      "blocker_count": 0,
+      "archived_name": "perplexity-d9405390f211.json"
+    },
+    {
+      "agent_id": "qwen",
+      "role": "pine_python_parity_review",
+      "canonical_response_sha256": "4175C288AE5F52D8DDCC07481D5D1F23060BCAF8719321D2290C57506D3FC307",
+      "archived_file_sha256": "154AA22809B102C33C85A2DD857BD10754B2C5306DF4A08D6876690EDC51ECFF",
+      "finding_count": 8,
+      "blocker_count": 5,
+      "archived_name": "qwen-4175c288ae5f.json"
+    },
+    {
+      "agent_id": "zai",
+      "role": "recursive_red_team",
+      "canonical_response_sha256": "E5ACD492FA6D1B691A8995E3FBCE00C1103E9977E8BCBAA8D23C5F5E556DDEF0",
+      "archived_file_sha256": "FABC7BEB14A2E5F551B1F1D9F99586969976E1AE59EBB1C857227231D39329EB",
+      "finding_count": 8,
+      "blocker_count": 5,
+      "archived_name": "zai-e5acd492fa6d.json"
+    }
+  ],
+  "consolidated_report": "AI_CONSOLIDATED_REVIEW_2026-10-19.md"
+}

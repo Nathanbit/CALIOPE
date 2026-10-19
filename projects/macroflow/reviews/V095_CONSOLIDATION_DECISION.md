@@ -3,6 +3,22 @@
 **Decision:** admit as a quarantined sidecar prototype; reject as a replacement
 for the canonical Pine model.
 
+## External review closed
+
+The bounded run `mf-v095-consolidation-20261019` received all eight contractual
+observations and advanced to `evidence_merge`. Its consolidated report is
+`AI_CONSOLIDATED_REVIEW_2026-10-19.md`; the content-addressed response index is
+`AI_REVIEW_EVIDENCE_INDEX_2026-10-19.json`.
+
+The deterministic decision was then ingested as `reject`. The final state is
+`archived_rejected`, with decision hash
+`2B66F60414A5F1B66D85D41352D3AE0EBF0B57E18AB9FEA8BA9CB291797CC76F`.
+
+The synthesis confirms this decision: reject promotion, preserve quarantine and
+revise. It also records two corrections to model output: the runner already has
+hard budgets, and live, auto-approval, automatic publishing and automatic
+trading are already disabled.
+
 ## Evidence
 
 - ZIP SHA-256: `7630C65966E1EB1311F9F6D49B9E434FBF4AEBC1680A760FF65BC9FA6599D3E9`.

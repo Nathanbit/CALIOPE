@@ -11,6 +11,24 @@ la modifica durante una corrida.
 - Fuente congelada: `source/MacroFlow_Backtest_v0_9_4_VALIDATION.pine`
 - Hashes: `MANIFEST.sha256`
 
+## Consolidación v0.9.5
+
+La revisión externa del 19 de octubre de 2026 recibió las ocho respuestas
+previstas: Perplexity, DeepSeek, Qwen, Z.ai, Kimi, Gemini, Meta y NVIDIA
+Nemotron. Claude ordenó la evidencia como sintetizador, sin autoridad de voto o
+promoción.
+
+El run terminó en `archived_rejected` con decisión `reject`; no abrió una
+segunda iteración ni materializó una candidata.
+
+- Informe final: `reviews/AI_CONSOLIDATED_REVIEW_2026-10-19.md`
+- Índice verificable: `reviews/AI_REVIEW_EVIDENCE_INDEX_2026-10-19.json`
+- Decisión: rechazar la promoción de v0.9.5, mantener el ZIP en cuarentena y
+  revisar sus bloqueadores antes de crear una candidata.
+
+El resultado no demuestra rentabilidad. La ventana observada contiene cero
+trades y no permite estimar rendimiento, Sharpe, drawdown o estabilidad.
+
 ## Flujo
 
 Los agentes producen revisiones separadas en `reviews/`. Las compuertas del
