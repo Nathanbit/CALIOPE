@@ -1,6 +1,6 @@
 # Propuesta: metadatos de reproducibilidad y salidas JSON con esquema en las observaciones
 
-Estado: **borrador para revisión humana**. No modifica nada por sí sola.
+Estado: **implementada en 0.4.0** con los valores recomendados: `reproducibility: recorded`, salida estructurada no obligatoria y `claude_themis` fuera del `enum`. `system_fingerprint` quedó como campo obligatorio que admite `null`, para que no se omita. Ver `CHANGELOG.md`.
 Afecta a `contracts/observation.schema.json`, `caliope_loop.py` (`_write_requests`, `validate_response`, `ingest_review`), `workflows/*.yaml` y `tests/test_caliope_loop.py`.
 Origen: revisión de `deepseek-ai/DeepInfer` (Apache-2.0). No se adopta el motor, que exige GPUs NVIDIA SM100 o Ascend 950 en Linux y no tiene API HTTP. Solo se toman dos ideas: salidas restringidas por esquema y generación determinista auditable.
 
