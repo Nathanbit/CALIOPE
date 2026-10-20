@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.0 — 2026-10-20
+
+- Contrato de observaciones 1.1: bloque obligatorio `generation` con proveedor,
+  modelo y versión, método de captura, salida estructurada, hashes de contrato y
+  prompt, temperatura, `top_p`, seed, límite de tokens, huella de sistema,
+  determinismo y momento de captura. Lo no expuesto por el proveedor va en `null`.
+- Cada run congela su contrato en `inputs/observation.schema.json` y lo pinea por
+  hash en el manifest. Los paquetes de `requests/` incluyen el esquema y los
+  `generation_requirements` (temperatura 0, seed derivado del `run_id`, 1 500
+  tokens de salida por revisor).
+- Compuertas nuevas en `ingest`, todas fail-closed: hashes de contrato y prompt,
+  credenciales en metadatos, timestamp con zona, `batch_invariant` solo con motor
+  local, y política del run (`reproducibility`, `require_structured_output`).
+- Política inicial: `reproducibility: recorded`, sin salida estructurada
+  obligatoria y sin mínimo de capturas no manuales para `human_review`.
+- Las capturas `manual_copy` se aceptan y quedan registradas por agente.
+- `claude_themis` (el orquestador) deja de ser un `agent_id` válido de
+  observación. El contrato 1.0 queda congelado en
+  `contracts/observation-1.0.schema.json` y los runs 1.0 se siguen validando con
+  él, sin conversión.
+
 ## 0.3.0 — 2026-10-19
 
 - Añade un ledger recursivo append-only para observaciones, hipótesis,

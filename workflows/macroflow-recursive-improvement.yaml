@@ -194,9 +194,18 @@ promotion:
 
 contracts:
   observation: contracts/observation.schema.json
+  observation_contract: "1.1"
+  observation_contract_legacy: contracts/observation-1.0.schema.json
   proposal: contracts/proposal.schema.json
   decision: contracts/decision.schema.json
   approval: contracts/approval.schema.json
+
+# Política de generación de observaciones. La aplica caliope_loop.py
+# (OBSERVATION_POLICY) y queda pineada en cada manifest; cambiarla aquí no basta.
+observation_policy:
+  reproducibility: recorded          # recorded | required
+  require_structured_output: false   # true cuando existan adaptadores API
+  min_non_manual_for_human_review: 0 # sube cuando haya adaptadores
 
 artifacts:
   - run_manifest.json

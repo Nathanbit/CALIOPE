@@ -39,6 +39,25 @@ LIMITS = {
     "max_output_tokens": 12_000,
     "max_cost_usd": 2.0,
 }
+# Observation contract versions. Runs keep the version they were initialised
+# with; 1.0 runs (e.g. the archived 2026-10-19 consolidation) are never
+# upgraded, because inventing generation metadata would fabricate evidence.
+OBSERVATION_CONTRACTS = {"1.0": "observation-1.0.schema.json", "1.1": "observation.schema.json"}
+CURRENT_OBSERVATION_CONTRACT = "1.1"
+OBSERVATION_POLICY = {
+    "reproducibility": "recorded",
+    "require_structured_output": False,
+    "min_non_manual_for_human_review": 0,
+}
+CAPTURE_METHODS = {"api_adapter", "local_engine", "manual_copy"}
+STRUCTURED_OUTPUTS = {"json_schema", "json_mode", "none"}
+DETERMINISM = {"none", "seeded_best_effort", "batch_invariant"}
+PROVIDER = re.compile(r"^[a-z0-9_.-]{2,40}$")
+CREDENTIAL = re.compile(
+    r"(sk-[A-Za-z0-9_-]{8,}|AIza[0-9A-Za-z_-]{10,}|ghp_[A-Za-z0-9]{10,}|github_pat_"
+    r"|xox[abpr]-|bearer\s+\S{8,}|://[^/\s:@]+:[^/\s@]+@)",
+    re.IGNORECASE,
+)
 HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 SAFE_TARGET = re.compile(r"^(source|tests|docs)/[A-Za-z0-9_./-]+$")
 STAGES = {
@@ -91,8 +110,8 @@ def _required(kind: str) -> set[str]:
     return set(schema["required"])
 
 
-def _strict_keys(value: dict, kind: str) -> None:
-    schema = read_json(CONTRACTS / f"{kind}.schema.json")
+def _strict_keys(value: dict, kind: str, schema: dict | None = None) -> None:
+    schema = schema if schema is not None else read_json(CONTRACTS / f"{kind}.schema.json")
     allowed = set(schema["properties"])
     missing = set(schema["required"]) - set(value)
     extra = set(value) - allowed
@@ -171,11 +190,107 @@ def _evidence_fingerprint(value: dict, kind: str) -> str:
     return sha256_bytes(canonical_bytes(body))
 
 
-def validate_response(value: dict, kind: str, run_id: str, iteration: int, agent: str) -> None:
+def _observation_contract(manifest: dict | None) -> str:
+    """Contract version a run was initialised with; manifests before 1.1 are 1.0."""
+    if manifest is None:
+        return "1.0"
+    version = manifest.get("observation_contract", "1.0")
+    if version not in OBSERVATION_CONTRACTS:
+        raise GateError(f"unknown observation contract: {version}")
+    return version
+
+
+def _run_seed(run_id: str) -> int:
+    """Seed fixed by the run, not by each reviewer, so every packet shares it."""
+    return int(sha256_bytes(run_id.encode("utf-8"))[:8], 16)
+
+
+def _generation_requirements(run_id: str) -> dict:
+    return {
+        "temperature": 0,
+        "seed": _run_seed(run_id),
+        "max_output_tokens": LIMITS["max_output_tokens"] // len(ROLES),
+    }
+
+
+def _observation_schema(manifest: dict | None) -> dict:
+    """1.1 runs validate against their own immutable contract snapshot."""
+    if _observation_contract(manifest) == "1.0":
+        return read_json(CONTRACTS / OBSERVATION_CONTRACTS["1.0"])
+    return read_json(Path(manifest["observation_contract_path"]))
+
+
+def _optional_number(value: Any, name: str, minimum: float, maximum: float) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not minimum <= value <= maximum:
+        raise GateError(f"invalid generation {name}")
+
+
+def _optional_int(value: Any, name: str, minimum: int) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise GateError(f"invalid generation {name}")
+
+
+def _optional_text(value: Any, name: str, maximum: int) -> None:
+    if value is not None and (not isinstance(value, str) or len(value) > maximum):
+        raise GateError(f"invalid generation {name}")
+
+
+def _validate_generation(generation: Any, schema: dict, manifest: dict) -> None:
+    expected = set(schema["properties"]["generation"]["required"])
+    if not isinstance(generation, dict) or set(generation) != expected:
+        raise GateError("invalid generation object")
+    if any(isinstance(item, str) and CREDENTIAL.search(item) for item in generation.values()):
+        raise GateError("generation metadata looks like a credential; never record keys or tokens")
+    if not isinstance(generation["provider"], str) or not PROVIDER.fullmatch(generation["provider"]):
+        raise GateError("invalid generation provider")
+    _bounded_text(generation["model"], "generation model", 2, 120)
+    _optional_text(generation["model_version"], "model_version", 120)
+    _optional_text(generation["system_fingerprint"], "system_fingerprint", 200)
+    if generation["capture_method"] not in CAPTURE_METHODS:
+        raise GateError("invalid generation capture_method")
+    if generation["structured_output"] not in STRUCTURED_OUTPUTS:
+        raise GateError("invalid generation structured_output")
+    if generation["determinism"] not in DETERMINISM:
+        raise GateError("invalid generation determinism")
+    if generation["determinism"] == "batch_invariant" and generation["capture_method"] != "local_engine":
+        raise GateError("batch_invariant determinism requires a local_engine capture")
+    if _hex(generation["contract_hash"], "generation contract_hash") != manifest["observation_contract_hash"]:
+        raise GateError("contract mismatch: observation was not generated against this run's contract")
+    if _hex(generation["prompt_hash"], "generation prompt_hash") != manifest["prompt_hash"]:
+        raise GateError("prompt mismatch: observation was not generated from this run's prompt")
+    _optional_number(generation["temperature"], "temperature", 0, 2)
+    _optional_number(generation["top_p"], "top_p", 0, 1)
+    _optional_int(generation["seed"], "seed", 0)
+    _optional_int(generation["max_output_tokens"], "max_output_tokens", 1)
+    captured_at = generation["captured_at"]
+    try:
+        parsed = datetime.fromisoformat(captured_at) if isinstance(captured_at, str) else None
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.tzinfo is None:
+        raise GateError("invalid generation captured_at; an aware ISO-8601 timestamp is required")
+    policy = manifest["observation_policy"]
+    required = manifest["generation_requirements"]
+    if policy["reproducibility"] == "required":
+        if generation["temperature"] != required["temperature"] or generation["seed"] != required["seed"]:
+            raise GateError("reproducibility required: temperature and seed must match the run requirements")
+    if policy["require_structured_output"] and generation["structured_output"] == "none":
+        raise GateError("structured output required by run policy")
+
+
+def validate_response(
+    value: dict, kind: str, run_id: str, iteration: int, agent: str, manifest: dict | None = None
+) -> None:
     if kind not in {"observation", "proposal"}:
         raise GateError("reviewer response kind must be observation or proposal")
-    _strict_keys(value, kind)
-    if value.get("schema_version") != "1.0" or value.get("run_id") != run_id:
+    version = _observation_contract(manifest) if kind == "observation" else "1.0"
+    schema = _observation_schema(manifest) if kind == "observation" else None
+    _strict_keys(value, kind, schema)
+    if value.get("schema_version") != version or value.get("run_id") != run_id:
         raise GateError("schema_version or run_id mismatch")
     if value.get("iteration") != iteration or value.get("agent_id") != agent:
         raise GateError("iteration or agent_id mismatch")
@@ -222,6 +337,8 @@ def validate_response(value: dict, kind: str, run_id: str, iteration: int, agent
         cost = budget.get("cost_usd")
         if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
             raise GateError("invalid budget_used")
+        if version == "1.1":
+            _validate_generation(value.get("generation"), schema, manifest)
     else:
         _hex(value.get("parent_candidate_hash"), "parent_candidate_hash")
         _bounded_text(value.get("hypothesis"), "hypothesis", 10, 1_500)
@@ -302,6 +419,11 @@ def validate_decision(value: dict, manifest: dict) -> None:
             raise GateError("human_review requires every deterministic gate to pass")
         if candidate_hash not in set(manifest.get("proposal_hashes", [])):
             raise GateError("human_review requires a known proposed candidate")
+        if _observation_contract(manifest) == "1.1":
+            captured = manifest.get("capture_methods", {}).values()
+            non_manual = sum(1 for method in captured if method != "manual_copy")
+            if non_manual < manifest["observation_policy"]["min_non_manual_for_human_review"]:
+                raise GateError("human_review requires more observations captured by an adapter or local engine")
 
 
 def run_path(run_id: str) -> Path:
@@ -382,6 +504,38 @@ def _validate_manifest(manifest: dict, run_id: str) -> None:
             raise GateError("baseline or prompt snapshot changed after run initialization")
     except OSError as exc:
         raise GateError(f"baseline or prompt snapshot is unavailable: {exc}") from None
+    _validate_observation_contract(manifest, run_id, input_root)
+
+
+def _validate_observation_contract(manifest: dict, run_id: str, input_root: Path) -> None:
+    contract_keys = {
+        "observation_contract", "observation_contract_path", "observation_contract_hash",
+        "observation_policy", "generation_requirements", "capture_methods",
+    }
+    if _observation_contract(manifest) == "1.0":
+        if contract_keys & set(manifest):
+            raise GateError("1.0 manifest carries 1.1 observation contract fields")
+        return
+    if not contract_keys.issubset(manifest):
+        raise GateError(f"manifest missing keys: {sorted(contract_keys - set(manifest))}")
+    if manifest["observation_policy"] != OBSERVATION_POLICY:
+        raise GateError("manifest observation policy was modified")
+    if manifest["generation_requirements"] != _generation_requirements(run_id):
+        raise GateError("manifest generation requirements were modified")
+    _hex(manifest["observation_contract_hash"], "manifest observation_contract_hash")
+    try:
+        contract = Path(manifest["observation_contract_path"]).resolve(strict=True)
+        if not contract.is_relative_to(input_root):
+            raise GateError("observation contract must point to the immutable run snapshot")
+        if sha256_file(contract) != manifest["observation_contract_hash"]:
+            raise GateError("observation contract snapshot changed after run initialization")
+    except OSError as exc:
+        raise GateError(f"observation contract snapshot is unavailable: {exc}") from None
+    captured = manifest["capture_methods"]
+    if not isinstance(captured, dict) or not set(captured).issubset(ROLES) or any(
+        method not in CAPTURE_METHODS for method in captured.values()
+    ):
+        raise GateError("invalid manifest capture_methods")
 
 
 def _load_manifest(folder: Path, run_id: str) -> dict:
@@ -408,6 +562,21 @@ def _write_requests(folder: Path, manifest: dict) -> None:
             "evidence_hashes": manifest["evidence_hashes"],
             "instructions": "Return only contract-valid JSON. You may review; you may not publish, approve or trade.",
         }
+        if kind == "observation" and _observation_contract(manifest) == "1.1":
+            # The schema travels inside the packet so an adapter can hand it to
+            # a provider's structured-output mode; ingest stays the authority.
+            packet["response_contract_hash"] = manifest["observation_contract_hash"]
+            packet["generation_requirements"] = {
+                "contract_hash": manifest["observation_contract_hash"],
+                "response_schema": read_json(Path(manifest["observation_contract_path"])),
+                "structured_output_preferred": "json_schema",
+                **manifest["generation_requirements"],
+                "policy": manifest["observation_policy"],
+            }
+            packet["instructions"] += (
+                " Fill generation with the real provider parameters; use null for anything the"
+                " provider does not expose. Never include keys or tokens."
+            )
         atomic_json(archive / f"{agent}.json", packet)
         atomic_json(folder / "requests" / f"{agent}.json", packet)
 
@@ -432,6 +601,9 @@ def init_run(baseline: Path, prompt_file: Path, run_id: str | None = None) -> Pa
     prompt_snapshot = inputs / f"prompts{prompt_file.suffix or '.txt'}"
     baseline_snapshot.write_bytes(baseline_bytes)
     prompt_snapshot.write_bytes(prompt_bytes)
+    contract_bytes = (CONTRACTS / OBSERVATION_CONTRACTS[CURRENT_OBSERVATION_CONTRACT]).read_bytes()
+    contract_snapshot = inputs / "observation.schema.json"
+    contract_snapshot.write_bytes(contract_bytes)
     manifest = {
         "schema_version": "1.0",
         "run_id": run_id,
@@ -455,6 +627,12 @@ def init_run(baseline: Path, prompt_file: Path, run_id: str | None = None) -> Pa
         "decision": None,
         "automatic_publish": False,
         "automatic_trading": False,
+        "observation_contract": CURRENT_OBSERVATION_CONTRACT,
+        "observation_contract_path": str(contract_snapshot.resolve()),
+        "observation_contract_hash": sha256_bytes(contract_bytes),
+        "observation_policy": dict(OBSERVATION_POLICY),
+        "generation_requirements": _generation_requirements(run_id),
+        "capture_methods": {},
     }
     atomic_json(folder / "run_manifest.json", manifest)
     _write_requests(folder, manifest)
@@ -489,7 +667,7 @@ def ingest_review(run_id: str, agent: str, response_file: Path) -> Path:
             raise GateError("unknown agent or response already ingested")
         kind = ROLES[agent]
         value = read_json(response_file)
-        validate_response(value, kind, run_id, manifest["iteration"], agent)
+        validate_response(value, kind, run_id, manifest["iteration"], agent, manifest)
         supplied_hashes = {item.upper() for item in value["input_hashes"]}
         known_hashes = {
             manifest["baseline_hash"], manifest["prompt_hash"], manifest["current_candidate_hash"],
@@ -506,6 +684,9 @@ def ingest_review(run_id: str, agent: str, response_file: Path) -> Path:
         snapshot["evidence_hashes"].append(digest)
         snapshot["evidence_fingerprints"].append(fingerprint)
         snapshot["agents"][agent] = "received"
+        if _observation_contract(snapshot) == "1.1" and kind == "observation":
+            # Recorded, not rejected: manual copy is today's real path.
+            snapshot["capture_methods"][agent] = value["generation"]["capture_method"]
         if all(state == "received" for state in snapshot["agents"].values()):
             snapshot["stage"] = "evidence_merge"
         out = folder / "responses" / f"iteration-{manifest['iteration']}" / f"{agent}-{digest[:12].lower()}.json"
@@ -542,6 +723,8 @@ def ingest_decision(run_id: str, decision_file: Path) -> Path:
                 manifest["iteration"] += 1
                 manifest["stage"] = "observe_parallel"
                 manifest["agents"] = {role: "pending" for role in ROLES}
+                if _observation_contract(manifest) == "1.1":
+                    manifest["capture_methods"] = {}
                 (folder / "responses" / f"iteration-{manifest['iteration']}").mkdir(parents=True, exist_ok=True)
                 _write_requests(folder, manifest)
         elif value["decision"] == "human_review":

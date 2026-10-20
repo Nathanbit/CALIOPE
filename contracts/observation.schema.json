@@ -2,20 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://caliope.local/schemas/observation.schema.json",
   "title": "CALIOPE agent observation",
+  "description": "Contract 1.1 for runs initialised after it. Runs initialised under 1.0 keep validating against observation-1.0.schema.json.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version", "run_id", "iteration", "agent_id", "role",
-    "input_hashes", "findings", "blockers", "budget_used"
+    "input_hashes", "findings", "blockers", "budget_used", "generation"
   ],
   "properties": {
-    "schema_version": {"const": "1.0"},
+    "schema_version": {"const": "1.1"},
     "run_id": {"type": "string", "minLength": 8, "maxLength": 80},
     "iteration": {"type": "integer", "minimum": 0, "maximum": 2},
     "agent_id": {
       "enum": [
         "perplexity", "deepseek", "qwen", "zai", "kimi", "gemini",
-        "meta", "nvidia_nemotron", "claude_themis"
+        "meta", "nvidia_nemotron"
       ]
     },
     "role": {"type": "string", "minLength": 3, "maxLength": 100},
@@ -56,6 +57,32 @@
         "input_tokens": {"type": "integer", "minimum": 0},
         "output_tokens": {"type": "integer", "minimum": 0},
         "cost_usd": {"type": "number", "minimum": 0}
+      }
+    },
+    "generation": {
+      "description": "How this observation was produced. Fields a provider does not expose are explicit null, never omitted or invented. Never contains keys, tokens or credentialed URLs.",
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "provider", "model", "model_version", "capture_method",
+        "structured_output", "contract_hash", "prompt_hash",
+        "temperature", "top_p", "seed", "max_output_tokens",
+        "system_fingerprint", "determinism", "captured_at"
+      ],
+      "properties": {
+        "provider": {"type": "string", "pattern": "^[a-z0-9_.-]{2,40}$"},
+        "model": {"type": "string", "minLength": 2, "maxLength": 120},
+        "model_version": {"type": ["string", "null"], "maxLength": 120},
+        "capture_method": {"enum": ["api_adapter", "local_engine", "manual_copy"]},
+        "structured_output": {"enum": ["json_schema", "json_mode", "none"]},
+        "contract_hash": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+        "prompt_hash": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+        "temperature": {"type": ["number", "null"], "minimum": 0, "maximum": 2},
+        "top_p": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "seed": {"type": ["integer", "null"], "minimum": 0},
+        "max_output_tokens": {"type": ["integer", "null"], "minimum": 1},
+        "system_fingerprint": {"type": ["string", "null"], "maxLength": 200},
+        "determinism": {"enum": ["none", "seeded_best_effort", "batch_invariant"]},
+        "captured_at": {"type": "string", "format": "date-time"}
       }
     }
   }
