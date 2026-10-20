@@ -46,7 +46,8 @@ def create_app(settings: Settings | None = None, broker: Broker | None = None) -
         b = broker or build_broker(s)
         b.connect()
         store = RiskStateStore(s.risk_state_path)
-        guard = RiskGuard(store, s.max_daily_loss_pct, s.session_tz, s.kill_switch_path)
+        guard = RiskGuard(store, s.max_daily_loss_pct, s.session_tz, s.kill_switch_path,
+                          s.max_consecutive_losses, s.cooldown_minutes)
         app.state.store = store
         app.state.router = OrderRouter(b, guard, s.symbol_map, s.partial_weights,
                                        s.max_risk_pct, s.journal_path)

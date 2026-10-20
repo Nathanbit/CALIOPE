@@ -57,3 +57,84 @@ def test_guard_daily_loss_and_zero_multiplier(tmp_path):
     store.set_multiplier(1, None, "pytest")
     (tmp_path / "KILL").touch()
     assert g.check_entry(10_000)[1] == "kill_switch"
+
+
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+NY = ZoneInfo("America/New_York")
+
+
+def test_guard_loss_streak_blocks_and_resets(tmp_path):
+    store = RiskStateStore(tmp_path / "s.json")
+    g = RiskGuard(store, max_daily_loss_pct=50, max_consecutive_losses=2)
+    t0 = datetime(2026, 10, 20, 10, 0, tzinfo=NY)
+    assert g.check_entry(1000, t0)[0]
+    g.record_close(-5, t0)
+    assert g.check_entry(1000, t0)[0]
+    g.record_close(-5, t0)
+    ok, reason, mult = g.check_entry(1000, t0)
+    assert not ok and reason == "loss_streak:2" and mult == 0.0
+    # día nuevo: la racha vuelve a cero
+    assert g.check_entry(990, t0 + timedelta(days=1))[0]
+
+
+def test_guard_win_resets_streak(tmp_path):
+    store = RiskStateStore(tmp_path / "s.json")
+    g = RiskGuard(store, max_daily_loss_pct=50, max_consecutive_losses=2)
+    t0 = datetime(2026, 10, 20, 10, 0, tzinfo=NY)
+    g.check_entry(1000, t0)
+    g.record_close(-1, t0)
+    g.record_close(+2, t0)
+    g.record_close(-1, t0)
+    assert g.check_entry(1000, t0)[0]
+
+
+def test_guard_cooldown(tmp_path):
+    store = RiskStateStore(tmp_path / "s.json")
+    g = RiskGuard(store, max_daily_loss_pct=50, cooldown_minutes=10)
+    t0 = datetime(2026, 10, 20, 10, 0, tzinfo=NY)
+    g.check_entry(1000, t0)
+    g.record_close(+1, t0)
+    ok, reason, _ = g.check_entry(1000, t0 + timedelta(minutes=4))
+    assert not ok and reason.startswith("cooldown:")
+    assert g.check_entry(1000, t0 + timedelta(minutes=10))[0]
+
+
+def test_guard_blocked_grade_and_hour(tmp_path):
+    store = RiskStateStore(tmp_path / "s.json")
+    g = RiskGuard(store, max_daily_loss_pct=50)
+    store.set_blocked(["C"], [3], "audit")
+    t0 = datetime(2026, 10, 20, 10, 0, tzinfo=NY)
+    assert g.check_entry(1000, t0, grade="A")[0]
+    assert g.check_entry(1000, t0, grade="C")[1] == "blocked_grade:C"
+    assert g.check_entry(1000, t0.replace(hour=3), grade="A")[1] == "blocked_hour:3"
+
+
+def test_guard_new_protections_off_by_default(tmp_path):
+    store = RiskStateStore(tmp_path / "s.json")
+    g = RiskGuard(store, max_daily_loss_pct=50)
+    t0 = datetime(2026, 10, 20, 10, 0, tzinfo=NY)
+    g.check_entry(1000, t0)
+    for _ in range(5):
+        g.record_close(-1, t0)
+    assert g.check_entry(1000, t0)[0]
+
+
+def test_guard_rejects_invalid_config(tmp_path):
+    store = RiskStateStore(tmp_path / "s.json")
+    with pytest.raises(ValueError):
+        RiskGuard(store, 3.0, max_consecutive_losses=0)
+    with pytest.raises(ValueError):
+        RiskGuard(store, 3.0, cooldown_minutes=-1)
+
+
+def test_old_state_file_still_loads(tmp_path):
+    # Un risk_state.json previo a esta versión no tiene los campos nuevos.
+    import json
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"risk_multiplier": 1.0, "halted_reason": None, "day": None,
+                             "day_start_equity": None, "active_model_version": None,
+                             "updated_at": None, "history": []}))
+    st = RiskStateStore(p).load()
+    assert st.consecutive_losses == 0 and st.blocked_grades == []
