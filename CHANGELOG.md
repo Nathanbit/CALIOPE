@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0 — 2026-10-20
+
+- `caliope_loop.py doctor`: diagnóstico de solo lectura (patrón de REA). Verifica
+  Python, contratos JSON, que ningún workflow active publicación/trading/live
+  automático y los `MANIFEST.sha256` de cada proyecto. Distingue diferencias solo
+  de fin de línea (`warn`) de cambios reales de contenido (`fail`, código 2).
+- `AGENTS.md`: reglas para agentes de código: autoridad, clasificación de la
+  evidencia (`observation`/`derivation`/`inference`/`unknown`), propiedad de
+  cada formato y verificación obligatoria por tipo de cambio.
+- MacroFlow lab: `macroflow/audit/causality.py` y `scripts/causality_report.py`
+  detectan lookahead (señal que cambia al borrar el futuro) y dependencia del
+  calentamiento, con informe JSON y código de salida usable como compuerta.
+  Ideas de `lookahead-analysis`/`recursive-analysis` de Freqtrade,
+  reimplementadas sin copiar código GPL.
+- MacroFlow lab: `RiskGuard` añade racha de pérdidas, enfriamiento tras cierre y
+  bloqueo por grado/hora con los veredictos `negative` de `audit/tradelog.py`.
+  Opt-in en la clase; el puente las activa con `MF_MAX_CONSECUTIVE_LOSSES=3` y
+  `MF_COOLDOWN_MINUTES=10` por defecto. Los cierres siempre pasan.
+- MacroFlow lab: `macroflow/audit/discretionary.py` y
+  `scripts/discretionary_report.py` analizan el historial "closed orders" de
+  SimpleFX como evidencia discrecional separada (`promotion_eligible=false`).
+
 ## 0.4.0 — 2026-10-20
 
 - Contrato de observaciones 1.1: bloque obligatorio `generation` con proveedor,

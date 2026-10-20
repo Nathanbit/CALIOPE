@@ -740,6 +740,81 @@ def print_status(run_id: str) -> None:
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
 
 
+# ---------------------------------------------------------------------------
+# doctor: diagnóstico de solo lectura (patrón "doctor" de REA). No modifica
+# nada salvo comprobar que runs/ es escribible. Cualquier "fail" devuelve 2.
+# ---------------------------------------------------------------------------
+UNSAFE_FLAG = re.compile(r"^\s*(automatic_publish|automatic_trading|live_execution)\s*:\s*true\b",
+                         re.IGNORECASE | re.MULTILINE)
+
+
+def _eol_variants(data: bytes) -> dict[str, str]:
+    lf = data.replace(b"\r\n", b"\n")
+    return {k: sha256_bytes(v).lower() for k, v in
+            (("raw", data), ("lf", lf), ("crlf", lf.replace(b"\n", b"\r\n")))}
+
+
+def _check_manifest(manifest: Path) -> list[dict]:
+    out = []
+    base = manifest.parent
+    for line_no, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        parts = line.split(None, 1)
+        name = f"manifest:{manifest.relative_to(ROOT).as_posix()}:{line_no}"
+        if len(parts) != 2 or not re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+            out.append({"check": name, "status": "fail", "detail": "línea con formato inválido"})
+            continue
+        want, rel = parts[0].lower(), parts[1].strip().lstrip("*")
+        target = (base / rel).resolve()
+        if base.resolve() not in target.parents:
+            out.append({"check": name, "status": "fail", "detail": f"ruta fuera del proyecto: {rel}"})
+            continue
+        if not target.is_file():
+            out.append({"check": name, "status": "fail", "detail": f"falta {rel}"})
+            continue
+        hashes = _eol_variants(target.read_bytes())
+        if hashes["raw"] == want:
+            continue
+        if want in (hashes["lf"], hashes["crlf"]):
+            out.append({"check": name, "status": "warn",
+                        "detail": f"{rel}: coincide solo tras normalizar finales de línea (git autocrlf)"})
+        else:
+            out.append({"check": name, "status": "fail",
+                        "detail": f"{rel}: hash distinto del congelado ({want[:12]}… vs {hashes['raw'][:12]}…)"})
+    return out
+
+
+def doctor() -> dict:
+    checks: list[dict] = []
+    ok_py = sys.version_info >= (3, 11)
+    checks.append({"check": "python", "status": "pass" if ok_py else "fail",
+                   "detail": sys.version.split()[0] + ("" if ok_py else " (<3.11)")})
+    for schema in sorted(CONTRACTS.glob("*.json")):
+        try:
+            read_json(schema)
+            checks.append({"check": f"contract:{schema.name}", "status": "pass", "detail": "JSON válido"})
+        except (OSError, ValueError) as exc:
+            checks.append({"check": f"contract:{schema.name}", "status": "fail", "detail": str(exc)[:200]})
+    for wf in sorted((ROOT / "workflows").glob("*.y*ml")):
+        hits = UNSAFE_FLAG.findall(wf.read_text(encoding="utf-8"))
+        checks.append({"check": f"workflow:{wf.name}", "status": "fail" if hits else "pass",
+                       "detail": f"flags activados: {sorted(set(hits))}" if hits else "sin publicación/trading automático"})
+    manifests = sorted((ROOT / "projects").glob("*/MANIFEST.sha256"))
+    for manifest in manifests:
+        found = _check_manifest(manifest)
+        checks.extend(found or [{"check": f"manifest:{manifest.relative_to(ROOT).as_posix()}",
+                                 "status": "pass", "detail": "todos los hashes coinciden"}])
+    try:
+        RUNS.mkdir(exist_ok=True)
+        ok_runs = os.access(RUNS, os.W_OK)
+    except OSError:
+        ok_runs = False
+    checks.append({"check": "runs_dir", "status": "pass" if ok_runs else "fail", "detail": str(RUNS.name)})
+    summary = {k: sum(c["status"] == k for c in checks) for k in ("pass", "warn", "fail")}
+    return {"healthy": summary["fail"] == 0, "summary": summary, "checks": checks}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -756,8 +831,13 @@ def main(argv: list[str] | None = None) -> int:
     p_decision.add_argument("--file", required=True, type=Path)
     p_status = sub.add_parser("status")
     p_status.add_argument("--run-id", required=True)
+    sub.add_parser("doctor", help="diagnóstico de solo lectura del entorno y la evidencia congelada")
     args = parser.parse_args(argv)
     try:
+        if args.command == "doctor":
+            report = doctor()
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+            return 0 if report["healthy"] else 2
         if args.command == "init":
             print(init_run(args.baseline, args.prompts, args.run_id))
         elif args.command == "ingest":

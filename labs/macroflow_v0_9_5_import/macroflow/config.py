@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     partial_weights: list[float] = [0.5, 0.3, 0.2]   # salidas 50/30/20
     max_risk_pct: float = 2.0                        # tope duro aunque Pine pida más
     max_daily_loss_pct: float = 3.0
+    max_consecutive_losses: int | None = 3           # MF_MAX_CONSECUTIVE_LOSSES; vacío = desactivado
+    cooldown_minutes: float = 10.0                   # espera mínima tras cada cierre
     session_tz: str = "America/New_York"
     max_alert_age_s: int = 120                       # descarta alertas viejas (reintentos/colas)
     max_webhook_bytes: int = 64_000

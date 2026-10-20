@@ -49,6 +49,10 @@ class OrderRouter:
         self.max_risk_pct = max_risk_pct
         self.journal_path = journal_path
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mf-exec")
+        # Equity al abrir cada símbolo: permite estimar el P&L de un CLOSE para la
+        # racha de pérdidas. Es aproximado si hay varios símbolos abiertos a la vez,
+        # y no ve stops/TP ejecutados por el broker sin alerta CLOSE.
+        self._entry_equity: dict[str, float] = {}
 
     def resolve_symbol(self, ticker: str) -> str:
         return self.symbol_map.get(ticker, self.symbol_map.get(ticker.split(":")[-1], ticker.split(":")[-1]))
@@ -72,10 +76,16 @@ class OrderRouter:
 
         if alert.action == "CLOSE":
             res = self.broker.close_all(symbol)
-            return base | {"status": "closed", "orders": [r.__dict__ for r in res]}
+            rec = base | {"status": "closed", "orders": [r.__dict__ for r in res]}
+            start = self._entry_equity.pop(symbol, None)
+            if start is not None and any(r.ok for r in res):
+                pnl = self.broker.equity() - start
+                self.guard.record_close(pnl, source=f"router:{symbol}")
+                rec["approx_pnl"] = pnl
+            return rec
 
         equity = self.broker.equity()
-        ok, reason, mult = self.guard.check_entry(equity)
+        ok, reason, mult = self.guard.check_entry(equity, grade=alert.grade)
         if not ok:
             return base | {"status": "blocked", "reason": reason, "equity": equity}
 
@@ -94,6 +104,8 @@ class OrderRouter:
             comment = f"MF{alert.model_version}|{alert.grade or '-'}|L{i + 1}"
             results.append(self.broker.market_order(symbol, alert.action, vol, alert.sl, tp, comment))
         status = "filled" if all(r.ok for r in results) else ("partial" if any(r.ok for r in results) else "rejected")
+        if status != "rejected":
+            self._entry_equity.setdefault(symbol, equity)
         return base | {"status": status, "equity": equity, "risk_pct": risk_pct, "risk_multiplier": mult,
                        "volume": total, "legs": legs, "orders": [r.__dict__ for r in results]}
 
