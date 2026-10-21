@@ -1,0 +1,9 @@
+#!/bin/sh
+# Bloquea commits con secretos o marcadores de GhostAction.
+# Activar una vez por clon:  git config core.hooksPath .githooks
+PY=$(command -v python3 || command -v python || command -v py)
+if [ -z "$PY" ]; then
+  echo "pre-commit: no encuentro Python; commit bloqueado (fail-closed)." >&2
+  exit 1
+fi
+exec "$PY" caliope_loop.py scan-secrets --staged
