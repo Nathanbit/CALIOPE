@@ -50,6 +50,7 @@ Todo informe, revisión o salida de herramienta separa cuatro tipos:
 | Cualquiera | `python caliope_loop.py doctor` |
 | Runner / ledger | `python -m unittest discover -s tests -p "test_*.py"` |
 | Réplica Python de MacroFlow | `pytest` en `labs/macroflow_v0_9_5_import` y `scripts/causality_report.py` sobre datos reales |
+| Disciplina (`tools/discipline/`) | `python -m unittest tests.test_discipline` |
 | Riesgo / puente | pruebas de `tests/test_risk.py` y `tests/test_router_protections.py` |
 
 Indica explícitamente qué no se verificó. Los datos sintéticos no prueban el

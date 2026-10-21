@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0 — 2026-10-20
+
+- Skills de proyecto en `.claude/skills/` (Claude Code las carga al abrir el repo):
+  - `caliope-pre-trade-gate`: compuerta GO / NO_GO / REVIEW_REQUIRED antes de
+    cada orden manual (riesgo, beneficio/riesgo, operaciones del día, racha de
+    pérdidas, enfriamiento, ventanas de sesión y checklist de ruptura/retesteo).
+  - `caliope-session-review`: revisión de la sesión desde el export de SimpleFX,
+    incluida la detección de ganadoras protegidas cerradas a mano antes del TP.
+  - `caliope-backtest-review`: lista de verificación de backtests de MacroFlow.
+- `tools/discipline/`: scripts offline que usan esas skills; reutilizan el
+  parser de SimpleFX de `audit/discretionary.py`.
+- Ideas adaptadas de tradermonty/claude-trading-skills y wshobson/agents (MIT),
+  encontradas vía skill-issue.in. No se copió código ni se instalaron scripts
+  de terceros.
+
 ## 0.6.0 — 2026-10-20
 
 - Precondiciones de determinismo (adaptadas de DeepInfer): `seeded_best_effort`

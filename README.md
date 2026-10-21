@@ -96,6 +96,13 @@ python -m unittest discover -s tests -p "test_caliope_loop.py" -v
 Para comprobar si un revisor es realmente determinista, `replay` compara una
 segunda captura con la original (ver `docs/DETERMINISM.md`).
 
+## Disciplina de trading manual
+
+`tools/discipline/pre_trade_gate.py` decide GO / NO_GO / REVIEW_REQUIRED antes
+de una orden manual y `tools/discipline/session_review.py` revisa la sesión
+desde el export de SimpleFX. Claude Code las usa mediante las skills de
+`.claude/skills/`. Ninguna envía órdenes.
+
 ## Ocho revisores externos
 
 Cada run crea un paquete separado para estos revisores. Sus opiniones son
