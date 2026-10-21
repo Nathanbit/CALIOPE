@@ -93,6 +93,9 @@ Prueba local del runner:
 python -m unittest discover -s tests -p "test_caliope_loop.py" -v
 ```
 
+Para comprobar si un revisor es realmente determinista, `replay` compara una
+segunda captura con la original (ver `docs/DETERMINISM.md`).
+
 ## Ocho revisores externos
 
 Cada run crea un paquete separado para estos revisores. Sus opiniones son

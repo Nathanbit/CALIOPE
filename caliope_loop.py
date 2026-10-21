@@ -258,6 +258,13 @@ def _validate_generation(generation: Any, schema: dict, manifest: dict) -> None:
         raise GateError("invalid generation determinism")
     if generation["determinism"] == "batch_invariant" and generation["capture_method"] != "local_engine":
         raise GateError("batch_invariant determinism requires a local_engine capture")
+    # Precondiciones tomadas de DeepInfer: salidas idénticas solo con semilla fija
+    # por secuencia y una versión concreta del motor. Sin ellas la afirmación de
+    # determinismo no es reproducible, así que se rechaza en vez de aceptarla.
+    if generation["determinism"] != "none" and generation["seed"] is None:
+        raise GateError(f"{generation['determinism']} determinism requires a recorded seed")
+    if generation["determinism"] == "batch_invariant" and not generation["model_version"]:
+        raise GateError("batch_invariant determinism requires model_version (engine/checkpoint identity)")
     if _hex(generation["contract_hash"], "generation contract_hash") != manifest["observation_contract_hash"]:
         raise GateError("contract mismatch: observation was not generated against this run's contract")
     if _hex(generation["prompt_hash"], "generation prompt_hash") != manifest["prompt_hash"]:
@@ -695,6 +702,65 @@ def ingest_review(run_id: str, agent: str, response_file: Path) -> Path:
         return out
 
 
+# ---------------------------------------------------------------------------
+# Replay: verifica una afirmación de determinismo repitiendo la captura.
+# Idea de DeepInfer (muestreo determinista + inferencia batch-invariant): si el
+# motor promete salidas idénticas para la misma entrada y semilla, una segunda
+# captura debe tener el mismo contenido. El replay no sustituye ni duplica la
+# respuesta original: se guarda aparte, consume presupuesto y no cambia la etapa.
+# ---------------------------------------------------------------------------
+REPLAY_VERDICTS = {
+    (True, "batch_invariant"): "verified_deterministic",
+    (True, "seeded_best_effort"): "reproduced",
+    (True, "none"): "reproduced_unclaimed",
+    (False, "batch_invariant"): "claim_contradicted",
+    (False, "seeded_best_effort"): "not_reproduced",
+    (False, "none"): "not_reproduced_expected",
+}
+REPLAY_GENERATION_KEYS = ("provider", "model", "model_version", "capture_method", "structured_output",
+                          "temperature", "top_p", "seed", "max_output_tokens", "determinism")
+
+
+def verify_replay(run_id: str, agent: str, replay_file: Path) -> Path:
+    folder = run_path(run_id)
+    with _run_lock(folder):
+        manifest = _load_manifest(folder, run_id)
+        if _observation_contract(manifest) != "1.1":
+            raise GateError("replay requires an observation contract with generation metadata (1.1)")
+        if manifest["agents"].get(agent) != "received" or ROLES.get(agent) != "observation":
+            raise GateError("replay needs an already ingested observation from this agent")
+        responses = sorted((folder / "responses" / f"iteration-{manifest['iteration']}").glob(f"{agent}-*.json"))
+        if len(responses) != 1:
+            raise GateError("could not identify the single original response for this agent")
+        original = read_json(responses[0])
+        replay = read_json(replay_file)
+        validate_response(replay, "observation", run_id, manifest["iteration"], agent, manifest)
+        g0, g1 = original["generation"], replay["generation"]
+        changed = [k for k in REPLAY_GENERATION_KEYS if g0[k] != g1[k]]
+        if changed:
+            raise GateError(f"replay must reuse the original sampling settings; differs in {changed}")
+        same = _evidence_fingerprint(original, "observation") == _evidence_fingerprint(replay, "observation")
+        snapshot = json.loads(json.dumps(manifest))
+        _add_budget(snapshot, replay, "observation")
+        record = {
+            "evidence_kind": "derivation",
+            "run_id": run_id, "iteration": manifest["iteration"], "agent_id": agent,
+            "determinism_claim": g0["determinism"],
+            "content_match": same,
+            "verdict": REPLAY_VERDICTS[(same, g0["determinism"])],
+            "original_sha256": sha256_bytes(canonical_bytes(original)),
+            "replay_sha256": sha256_bytes(canonical_bytes(replay)),
+            "replay_captured_at": g1["captured_at"],
+            "note": "Compara hallazgos y bloqueos; la identidad, el presupuesto y la fecha se ignoran.",
+        }
+        out_dir = folder / "replays" / f"iteration-{manifest['iteration']}"
+        n = len(list(out_dir.glob(f"{agent}-*.json"))) if out_dir.is_dir() else 0
+        out = out_dir / f"{agent}-{n + 1:02d}.json"
+        atomic_json(out, record)
+        atomic_json(folder / "run_manifest.json", snapshot)
+        return out
+
+
 def ingest_decision(run_id: str, decision_file: Path) -> Path:
     folder = run_path(run_id)
     with _run_lock(folder):
@@ -934,6 +1000,10 @@ def main(argv: list[str] | None = None) -> int:
     p_decision = sub.add_parser("decision")
     p_decision.add_argument("--run-id", required=True)
     p_decision.add_argument("--file", required=True, type=Path)
+    p_replay = sub.add_parser("replay", help="verifica una afirmación de determinismo con una segunda captura")
+    p_replay.add_argument("--run-id", required=True)
+    p_replay.add_argument("--agent", choices=sorted(ROLES), required=True)
+    p_replay.add_argument("--file", required=True, type=Path)
     p_status = sub.add_parser("status")
     p_status.add_argument("--run-id", required=True)
     sub.add_parser("doctor", help="diagnóstico de solo lectura del entorno y la evidencia congelada")
@@ -957,6 +1027,10 @@ def main(argv: list[str] | None = None) -> int:
             print(init_run(args.baseline, args.prompts, args.run_id))
         elif args.command == "ingest":
             print(ingest_review(args.run_id, args.agent, args.file))
+        elif args.command == "replay":
+            out = verify_replay(args.run_id, args.agent, args.file)
+            print(out)
+            print(json.dumps(read_json(out), indent=2, ensure_ascii=False))
         elif args.command == "decision":
             print(ingest_decision(args.run_id, args.file))
         else:

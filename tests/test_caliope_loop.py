@@ -264,7 +264,55 @@ class LoopTests(unittest.TestCase):
     def test_batch_invariant_claim_requires_local_engine(self):
         with self.assertRaisesRegex(loop.GateError, "batch_invariant"):
             self.ingest_observation("perplexity", determinism="batch_invariant", capture_method="api_adapter")
-        self.ingest_observation("perplexity", determinism="batch_invariant", capture_method="local_engine")
+        self.ingest_observation("perplexity", determinism="batch_invariant", capture_method="local_engine",
+                                seed=7, model_version="engine-1.0+ckpt-1017")
+
+    def test_determinism_claims_require_seed_and_engine_identity(self):
+        with self.assertRaisesRegex(loop.GateError, "requires a recorded seed"):
+            self.ingest_observation("perplexity", determinism="seeded_best_effort", seed=None)
+        with self.assertRaisesRegex(loop.GateError, "requires a recorded seed"):
+            self.ingest_observation("perplexity", determinism="batch_invariant",
+                                    capture_method="local_engine", seed=None, model_version="v1")
+        with self.assertRaisesRegex(loop.GateError, "model_version"):
+            self.ingest_observation("perplexity", determinism="batch_invariant",
+                                    capture_method="local_engine", seed=3, model_version=None)
+
+    def _replay_file(self, agent, value):
+        path = self.root / f"{agent}-replay.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def test_replay_verifies_batch_invariant_claim(self):
+        claim = dict(determinism="batch_invariant", capture_method="local_engine", seed=11, model_version="v1")
+        original = self.observation("perplexity", **claim)
+        original["findings"] = [{"id": "f-001", "kind": "fact", "claim": "x", "evidence_refs": [],
+                                 "confidence": 0.9, "uncertainty": ""}]
+        self.ingest_value("perplexity", original)
+        calls = self.manifest()["budget_used"]["calls"]
+        replay = json.loads(json.dumps(original))
+        replay["generation"]["captured_at"] = "2026-10-20T18:00:00+00:00"
+        out = loop.verify_replay("test-run-0001", "perplexity", self._replay_file("perplexity", replay))
+        record = loop.read_json(out)
+        self.assertEqual(record["verdict"], "verified_deterministic")
+        self.assertEqual(self.manifest()["budget_used"]["calls"], calls + 1)
+        self.assertEqual(self.manifest()["agents"]["perplexity"], "received")
+
+    def test_replay_mismatch_contradicts_claim(self):
+        claim = dict(determinism="batch_invariant", capture_method="local_engine", seed=11, model_version="v1")
+        self.ingest_value("perplexity", self.observation("perplexity", **claim))
+        replay = self.observation("perplexity", **claim)
+        replay["blockers"] = ["otra conclusión"]
+        out = loop.verify_replay("test-run-0001", "perplexity", self._replay_file("perplexity", replay))
+        self.assertEqual(loop.read_json(out)["verdict"], "claim_contradicted")
+
+    def test_replay_must_reuse_sampling_settings_and_needs_original(self):
+        with self.assertRaisesRegex(loop.GateError, "already ingested"):
+            loop.verify_replay("test-run-0001", "perplexity",
+                               self._replay_file("perplexity", self.observation("perplexity")))
+        self.ingest_value("perplexity", self.observation("perplexity", seed=5, determinism="seeded_best_effort"))
+        changed = self.observation("perplexity", seed=6, determinism="seeded_best_effort")
+        with self.assertRaisesRegex(loop.GateError, "reuse the original sampling settings"):
+            loop.verify_replay("test-run-0001", "perplexity", self._replay_file("perplexity", changed))
 
     def test_naive_captured_at_is_rejected(self):
         with self.assertRaisesRegex(loop.GateError, "captured_at"):

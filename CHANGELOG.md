@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 — 2026-10-20
+
+- Precondiciones de determinismo (adaptadas de DeepInfer): `seeded_best_effort`
+  y `batch_invariant` exigen `seed`; `batch_invariant` exige además
+  `model_version`. Las afirmaciones no reproducibles se rechazan al ingerir.
+- `caliope_loop.py replay`: verifica una afirmación de determinismo con una
+  segunda captura y guarda el veredicto en `runs/<run>/replays/` sin tocar la
+  respuesta original ni la etapa del run. Consume presupuesto.
+- `docs/DETERMINISM.md`: niveles de determinismo, uso de `replay` e ideas
+  pendientes (gramáticas en contrato 1.2, Pass@k).
+
 ## 0.5.1 — 2026-10-20
 
 - Endurecimiento frente a GhostAction (workflows de GitHub Actions maliciosos
