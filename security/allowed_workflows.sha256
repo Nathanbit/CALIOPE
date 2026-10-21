@@ -1,0 +1,3 @@
+# Workflows de GitHub Actions aprobados: "<sha256>  .github/workflows/<archivo>".
+# CALIOPE no usa CI. Vacío a propósito: cualquier workflow nuevo hace fallar
+# `python caliope_loop.py doctor` hasta que una persona lo revise y lo apruebe aquí.

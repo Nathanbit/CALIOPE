@@ -785,6 +785,102 @@ def _check_manifest(manifest: Path) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Seguridad de la cadena de suministro (respuesta a GhostAction, oct-2026).
+# CALIOPE no usa CI: cualquier workflow de GitHub Actions debe estar aprobado
+# por hash. El escáner nunca imprime el valor de un secreto, solo dónde está.
+# ---------------------------------------------------------------------------
+SECRET_PATTERNS = {
+    "aws_access_key": re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
+    "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
+    "github_fine_grained_pat": re.compile(r"\bgithub_pat_[A-Za-z0-9_]{40,}\b"),
+    "gitlab_token": re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
+    "anthropic_key": re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"),
+    "openai_key": re.compile(r"\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}"),
+    "openrouter_key": re.compile(r"\bsk-or-v1-[A-Za-z0-9]{32,}"),
+    "google_api_key": re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
+    "slack_token": re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
+    "sendgrid_key": re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"),
+    "npm_token": re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
+    "pypi_token": re.compile(r"\bpypi-[A-Za-z0-9_-]{50,}"),
+    "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY"),
+}
+# Marcadores publicados de la campaña GhostAction. Se escriben partidos para que
+# este archivo no se detecte a sí mismo.
+IOC_MARKERS = tuple("".join(parts) for parts in (
+    ("193.32.", "204.199"), ("my-git", "hub.com"), ("AKIA_CTX", "_START"),
+    ("send-", "secrets"), ("Prepare Cache ", "Busting"),
+))
+ALLOWED_WORKFLOWS = Path("security") / "allowed_workflows.sha256"
+MAX_SCAN_BYTES = 2_000_000
+
+
+def _git_files(staged: bool) -> list[tuple[str, bytes]]:
+    import subprocess
+    cmd = (["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"] if staged
+           else ["git", "ls-files", "-z"])
+    names = subprocess.run(cmd, cwd=ROOT, capture_output=True, check=True).stdout.split(b"\0")
+    out = []
+    for raw in names:
+        if not raw:
+            continue
+        name = raw.decode("utf-8", "replace")
+        if staged:
+            data = subprocess.run(["git", "show", f":{name}"], cwd=ROOT, capture_output=True).stdout
+        else:
+            path = ROOT / name
+            data = path.read_bytes() if path.is_file() and path.stat().st_size <= MAX_SCAN_BYTES else b""
+        out.append((name, data[:MAX_SCAN_BYTES]))
+    return out
+
+
+def scan_text(name: str, data: bytes) -> list[dict]:
+    """Devuelve hallazgos sin el valor del secreto (solo archivo, línea y tipo)."""
+    if b"\0" in data[:8192]:
+        return []  # binario
+    findings = []
+    for line_no, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
+        for kind, pattern in SECRET_PATTERNS.items():
+            if pattern.search(line):
+                findings.append({"file": name, "line": line_no, "kind": kind})
+        for marker in IOC_MARKERS:
+            if marker in line and name != "caliope_loop.py":
+                findings.append({"file": name, "line": line_no, "kind": "ghostaction_ioc"})
+    return findings
+
+
+def scan_secrets(staged: bool = False) -> list[dict]:
+    findings: list[dict] = []
+    for name, data in _git_files(staged):
+        findings.extend(scan_text(name, data))
+    return findings
+
+
+def _check_workflows() -> list[dict]:
+    wf_dir = ROOT / ".github" / "workflows"
+    files = sorted(p for p in wf_dir.glob("*") if p.is_file()) if wf_dir.is_dir() else []
+    if not files:
+        return [{"check": "ci_workflows", "status": "pass", "detail": "sin workflows de GitHub Actions"}]
+    allowed: dict[str, str] = {}
+    allow_file = ROOT / ALLOWED_WORKFLOWS
+    if allow_file.is_file():
+        for line in allow_file.read_text(encoding="utf-8").splitlines():
+            parts = line.split(None, 1)
+            if len(parts) == 2 and HEX64.match(parts[0]):
+                allowed[parts[1].strip()] = parts[0].lower()
+    out = []
+    for f in files:
+        rel = f.relative_to(ROOT).as_posix()
+        digest = sha256_file(f).lower()
+        if allowed.get(rel) == digest:
+            out.append({"check": f"ci_workflow:{rel}", "status": "pass", "detail": "aprobado por hash"})
+        else:
+            why = "hash distinto del aprobado" if rel in allowed else "no aprobado"
+            out.append({"check": f"ci_workflow:{rel}", "status": "fail",
+                        "detail": f"{why}: revisa quién lo añadió; CALIOPE no usa CI"})
+    return out
+
+
 def doctor() -> dict:
     checks: list[dict] = []
     ok_py = sys.version_info >= (3, 11)
@@ -805,6 +901,15 @@ def doctor() -> dict:
         found = _check_manifest(manifest)
         checks.extend(found or [{"check": f"manifest:{manifest.relative_to(ROOT).as_posix()}",
                                  "status": "pass", "detail": "todos los hashes coinciden"}])
+    checks.extend(_check_workflows())
+    try:
+        found = scan_secrets()
+        checks.append({"check": "secret_scan", "status": "fail" if found else "pass",
+                       "detail": f"{len(found)} hallazgo(s): " + ", ".join(
+                           f"{f['file']}:{f['line']} ({f['kind']})" for f in found[:10])
+                       if found else "sin secretos ni marcadores de GhostAction en archivos versionados"})
+    except Exception as exc:  # sin git: no se puede afirmar que esté limpio
+        checks.append({"check": "secret_scan", "status": "warn", "detail": f"no ejecutado: {exc}"[:200]})
     try:
         RUNS.mkdir(exist_ok=True)
         ok_runs = os.access(RUNS, os.W_OK)
@@ -832,8 +937,18 @@ def main(argv: list[str] | None = None) -> int:
     p_status = sub.add_parser("status")
     p_status.add_argument("--run-id", required=True)
     sub.add_parser("doctor", help="diagnóstico de solo lectura del entorno y la evidencia congelada")
+    p_scan = sub.add_parser("scan-secrets", help="busca secretos e IOC de GhostAction (sin mostrar valores)")
+    p_scan.add_argument("--staged", action="store_true", help="solo lo preparado para commit (hook)")
     args = parser.parse_args(argv)
     try:
+        if args.command == "scan-secrets":
+            found = scan_secrets(staged=args.staged)
+            for f in found:
+                print(f"SECRETO? {f['file']}:{f['line']} ({f['kind']})", file=sys.stderr)
+            if found:
+                print("Commit bloqueado: quita el secreto, rótalo si llegó a subirse y vuelve a intentar.",
+                      file=sys.stderr)
+            return 2 if found else 0
         if args.command == "doctor":
             report = doctor()
             print(json.dumps(report, indent=2, ensure_ascii=False))

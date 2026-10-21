@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.1 — 2026-10-20
+
+- Endurecimiento frente a GhostAction (workflows de GitHub Actions maliciosos
+  que roban secretos). `doctor` falla ante cualquier workflow no aprobado por
+  hash en `security/allowed_workflows.sha256` y ante secretos o marcadores de
+  la campaña en archivos versionados.
+- `caliope_loop.py scan-secrets [--staged]`: detecta claves de nube, GitHub,
+  GitLab, IA (Anthropic, OpenAI, OpenRouter, Google) y otras, sin imprimir
+  nunca el valor. Hook `.githooks/pre-commit` (fail-closed) para usarlo antes
+  de cada commit.
+- `.gitignore` amplía patrones de credenciales; `SECURITY.md` añade la lista de
+  controles de cuenta y el procedimiento ante un workflow desconocido.
+
 ## 0.5.0 — 2026-10-20
 
 - `caliope_loop.py doctor`: diagnóstico de solo lectura (patrón de REA). Verifica

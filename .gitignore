@@ -18,3 +18,13 @@ dist/
 build/
 projects/**/runs/
 projects/**/reviews/*.tmp
+# Credenciales y configuración local de herramientas (endurecimiento GhostAction)
+.npmrc
+.pypirc
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+service-account*.json
+*credentials*.json
+.claude/settings.local.json
