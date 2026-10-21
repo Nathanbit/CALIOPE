@@ -39,9 +39,14 @@ señal parece obvia. Es justo cuando más se rompen las reglas.
      --simplefx-csv SFX_closed_orders_....csv --journal state/journal/pre_trade.jsonl
    ```
 
-3. Comunica el resultado tal cual:
+   Para registrar una idea sin operarla usa `"intent": "WATCHLIST"`: el
+   resultado será `NO_ACTIONABLE_ORDERS`.
+
+3. Comunica el resultado tal cual (si hay cortacircuitos activo, di la hora de
+   `release_at`):
    - `GO`: el plan cumple sus reglas. Recuerda que no es una predicción.
    - `NO_GO`: lista las razones bloqueantes y **no** propongas cómo saltarlas.
+     Tiene prioridad sobre `REVIEW_REQUIRED`.
    - `REVIEW_REQUIRED`: falta un dato; pídelo. Nunca lo supongas.
 
 ## Reglas por defecto (`tools/discipline/rules.py`, editables con `--rules`)
@@ -52,7 +57,7 @@ señal parece obvia. Es justo cuando más se rompen las reglas.
 | Beneficio/riesgo mínimo | 2.0 |
 | Operaciones por día | 3 (incluye posiciones abiertas) |
 | Pérdidas seguidas | 2 → sesión terminada |
-| Pérdida diaria | 10% |
+| Cortacircuitos | pérdida diaria 10%, semanal 20%, mensual 30% (`HALTED` hasta el día, lunes o mes siguiente); racha de 2 pérdidas → `COOLDOWN` 12 h |
 | Enfriamiento tras una pérdida | 10 min |
 | Ventanas (America/Guayaquil) | 19:00–21:00, 02:00–03:30, 08:30–10:30 |
 | Checklist | rango marcado, cierre de ruptura, retesteo confirmado, sin noticias |

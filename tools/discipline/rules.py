@@ -11,7 +11,7 @@ import json
 import math
 import sys
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -31,6 +31,9 @@ class Rules:
     max_trades_per_day: int = 3
     max_consecutive_losses: int = 2
     max_daily_loss_pct: float = 10.0
+    max_weekly_loss_pct: float = 20.0
+    max_monthly_loss_pct: float = 30.0
+    streak_cooldown_hours: float = 12.0
     revenge_cooldown_min: float = 10.0
     session_windows: list[list[str]] = field(default_factory=lambda: [
         ["19:00", "21:00"],   # Tokio
@@ -92,3 +95,63 @@ def losing_streak(pnls) -> int:
         elif v > 0:
             break
     return streak
+
+
+def _start_of(kind: str, now: datetime) -> datetime:
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if kind == "day":
+        return day
+    if kind == "week":
+        return day - timedelta(days=day.weekday())
+    return day.replace(day=1)
+
+
+def _release_of(kind: str, now: datetime) -> datetime:
+    start = _start_of(kind, now)
+    if kind == "day":
+        return start + timedelta(days=1)
+    if kind == "week":
+        return start + timedelta(days=7)
+    return (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
+def circuit_breaker(trades, equity: float | None, rules: Rules, now: datetime) -> dict:
+    """Estado del cortacircuitos de la cuenta (ingeniería inversa de drawdown-circuit-breaker).
+
+    Pérdida diaria/semanal/mensual como % del capital estimado al inicio del periodo
+    (equity actual − P&L del periodo) y racha de pérdidas con hora de liberación.
+    Sin historial o sin equity no se afirma nada: estado UNKNOWN (fail-closed).
+    """
+    if trades is None or equity is None or equity <= 0:
+        return {"state": "UNKNOWN", "reasons": ["sin historial o sin equity: no se puede evaluar"],
+                "release_at": None, "periods": {}}
+    tz = ZoneInfo(rules.tz)
+    now = now.astimezone(tz)
+    closed = trades[trades["exit_time"] <= now].copy()
+    closed["local_exit"] = closed["exit_time"].dt.tz_convert(tz)
+    reasons, releases, periods = [], [], {}
+    halted = False
+    limits = {"day": rules.max_daily_loss_pct, "week": rules.max_weekly_loss_pct,
+              "month": rules.max_monthly_loss_pct}
+    names = {"day": "diaria", "week": "semanal", "month": "mensual"}
+    for kind, limit in limits.items():
+        pnl = float(closed.loc[closed["local_exit"] >= _start_of(kind, now), "pnl"].sum())
+        start_equity = equity - pnl
+        loss_pct = (-pnl / start_equity * 100) if pnl < 0 and start_equity > 0 else 0.0
+        periods[kind] = {"pnl": round(pnl, 4), "loss_pct": round(loss_pct, 2), "limit_pct": limit}
+        if loss_pct >= limit:
+            release = _release_of(kind, now)
+            reasons.append(f"pérdida {names[kind]} {loss_pct:.1f}% ≥ {limit}% (se libera {release:%Y-%m-%d %H:%M})")
+            releases.append(release)
+            halted = True
+    ordered = closed.sort_values("exit_time")
+    streak = losing_streak(ordered["pnl"])
+    if streak >= rules.max_consecutive_losses:
+        last_loss = ordered.loc[ordered["pnl"] < 0, "local_exit"].iloc[-1]
+        release = last_loss + timedelta(hours=rules.streak_cooldown_hours)
+        if release > now:
+            reasons.append(f"{streak} pérdidas seguidas: enfriamiento hasta {release:%Y-%m-%d %H:%M}")
+            releases.append(release)
+    state = "HALTED" if halted else ("COOLDOWN" if reasons else "TRADING_ALLOWED")
+    return {"state": state, "reasons": reasons, "losing_streak": streak, "periods": periods,
+            "release_at": max(releases).isoformat() if releases else None}

@@ -26,5 +26,11 @@ Adaptada de `trade-performance-coach` y `signal-postmortem`
    tacto: es el patrón que vuelve negativa la relación ganancia/pérdida media.
    "Faltaban X puntos al TP" no significa que el precio los hubiera alcanzado.
 
+4. Presenta la sección **Coach**: veredicto, etiquetas con su evidencia y nivel
+   de confianza, y la pregunta de cada una. Son hipótesis, no diagnósticos:
+   usa "posible". Ofrece las reglas propuestas para la próxima sesión y deja
+   que la persona elija aceptar, modificar, aplazar o solo registrar (por
+   defecto, solo registrar).
+
 Para métricas de varias semanas (esperanza, rachas, franjas horarias), usa
 `labs/macroflow_v0_9_5_import/scripts/discretionary_report.py`.
