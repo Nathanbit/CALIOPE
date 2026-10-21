@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.0",
+  "batch_id": "btcusdt-prediction-20261021",
+  "captured_from": "TradingView chart BINANCE:BTCUSDT 15m, layout FprROXVJ, strategy MF BT V096 GOV v46 (defaults)",
+  "timezone_status": "known",
+  "snapshots": [
+    {
+      "asset": "BTCUSDT",
+      "feed": "BINANCE:BTCUSDT",
+      "timeframe": "15m",
+      "observed_at": "2026-10-21T14:14:23-04:00",
+      "source": "TradingView chart",
+      "model": "MacroFlow v0.9.6 GOV candidate (TradingView script version 46)",
+      "values": {
+        "price": 84713.92,
+        "day_change_pct": 2.03,
+        "fundamental_score": 4,
+        "fundamental_grade": "C",
+        "transmission_score": 13,
+        "transmission_state": "neutral",
+        "micro_score": 60,
+        "mtf_score": 100,
+        "structure": "ruptura_long",
+        "consensus_direction": "long",
+        "consensus_count": 1,
+        "consensus_total": 3,
+        "controls": "VETO CORR 2/3",
+        "grade": "N/D",
+        "pattern_present": false,
+        "relative_volume": 0.44,
+        "cost_metric": 0.3,
+        "atr": 223.76,
+        "z_spy": 0.27,
+        "z_vix": -0.1,
+        "z_dxy": -0.6,
+        "pearson_r": 0.0,
+        "pearson_t": 0.01,
+        "pearson_n": 20,
+        "pearson_consistency": "0/3",
+        "levels_observed": {
+          "ema_fast": 84367.91,
+          "operative_vwap": 84327.84,
+          "opening_box_high": 83968.58,
+          "ema_setup": 83702.24
+        }
+      },
+      "decision_context": {
+        "new_entry_signal": "none",
+        "manage_existing": "not_applicable",
+        "reported_action": "SIN OPERACIÓN"
+      }
+    }
+  ],
+  "prediction": {
+    "evidence_type": "inference",
+    "author": "Claude (analysis requested by the user; no order placed)",
+    "made_at": "2026-10-21T18:17:00Z",
+    "horizon_end": "2026-10-22T00:15:00Z",
+    "reference_price": 84713.92,
+    "measurement": "BINANCE:BTCUSDT 1m highs/lows between made_at and horizon_end; the first level touched decides",
+    "primary_call": {
+      "label": "RETEST_FIRST",
+      "statement": "Price touches 84,000 or lower before it touches 85,200 or higher",
+      "probability": 0.55
+    },
+    "alternative_call": {
+      "label": "EXTENSION_FIRST",
+      "statement": "Price touches 85,200 or higher before 84,000 or lower",
+      "probability": 0.45
+    },
+    "secondary_check": {
+      "label": "FAILED_BREAKOUT",
+      "statement": "A 15m candle closes below 83,500 before horizon_end",
+      "probability": 0.25
+    },
+    "unresolved_rule": "If neither 84,000 nor 85,200 is touched before horizon_end, the outcome is NEITHER and is scored as unresolved, never as a hit",
+    "rationale": [
+      "observation: breakout above the 83,000-84,000 weekly resistance this morning; price holding 84,300-84,800 for about four hours",
+      "observation: relative volume 0.44x during the hold; the breakout move had volume, the consolidation does not",
+      "observation: MacroFlow reports SIN OPERACIÓN with VETO CORR 2/3 (BTC-SPY Pearson r 0.00) and consensus LONG only 1/3",
+      "observation: a manual long drawing on the chart (SL 83,266, TP 84,671, RR 1) has already reached its target",
+      "inference: low-volume consolidation under the 85,000 round number after a target hit favours a retest of the 84,000 breakout zone before extension",
+      "inference: hot September CPI (3.7%), 10Y yield near 5.1% and FOMC on 2026-10-28 are a headwind; ETF inflows and a Nasdaq rebound are a tailwind"
+    ]
+  },
+  "outcome": {
+    "status": "open_unresolved",
+    "promotion_eligible": false,
+    "resolved_at": null,
+    "first_level_touched": null,
+    "primary_call_hit": null,
+    "failed_breakout": null,
+    "notes": "Fill only after horizon_end from observed price data. Agreement between models never turns this inference into a fact."
+  },
+  "controls": {
+    "observation_only": true,
+    "automatic_trading": false,
+    "orders_placed": false
+  }
+}
