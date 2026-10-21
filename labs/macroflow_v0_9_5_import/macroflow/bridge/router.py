@@ -10,7 +10,7 @@ import logging
 import threading
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from macroflow.timeutil import utc_now_iso
 from pathlib import Path
 
 from macroflow.bridge.schemas import TVAlert
@@ -110,7 +110,7 @@ class OrderRouter:
                        "volume": total, "legs": legs, "orders": [r.__dict__ for r in results]}
 
     def _journal(self, rec: dict) -> None:
-        rec = {"ts": datetime.utcnow().isoformat() + "Z", **rec}
+        rec = {"ts": utc_now_iso(), **rec}
         self.journal_path.parent.mkdir(parents=True, exist_ok=True)
         with self.journal_path.open("a") as f:
             f.write(json.dumps(rec, default=str) + "\n")

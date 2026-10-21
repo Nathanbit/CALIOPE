@@ -15,6 +15,7 @@ Todas son opt-in en RiskGuard (por defecto desactivadas) y los cierres siempre p
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import threading
@@ -22,6 +23,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from macroflow.timeutil import utc_now_iso
 
 
 @dataclass
@@ -37,6 +40,17 @@ class RiskState:
     blocked_hours: list[int] = field(default_factory=list)
     updated_at: str | None = None
     history: list[dict] = field(default_factory=list)
+
+
+def _is_valid_equity(value: float | None) -> bool:
+    return value is not None and math.isfinite(value) and value > 0
+
+
+def _require_aware(dt: datetime) -> datetime:
+    """Rechaza datetimes naive: astimezone() los tomaría como hora local del servidor."""
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise ValueError("datetime naive no permitido; usa un datetime con zona horaria")
+    return dt
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -58,7 +72,7 @@ class RiskStateStore:
         return RiskState(**json.loads(self.path.read_text()))
 
     def save(self, state: RiskState) -> None:
-        state.updated_at = datetime.utcnow().isoformat() + "Z"
+        state.updated_at = utc_now_iso()
         state.history = state.history[-200:]
         _atomic_write_json(self.path, asdict(state))
 
@@ -67,7 +81,7 @@ class RiskStateStore:
             st = self.load()
             st.risk_multiplier = max(0.0, float(value))
             st.halted_reason = reason if value == 0 else None
-            st.history.append({"at": datetime.utcnow().isoformat() + "Z", "source": source,
+            st.history.append({"at": utc_now_iso(), "source": source,
                                "risk_multiplier": st.risk_multiplier, "reason": reason})
             self.save(st)
             return st
@@ -78,7 +92,7 @@ class RiskStateStore:
             st = self.load()
             st.blocked_grades = sorted({str(g) for g in grades})
             st.blocked_hours = sorted({int(h) for h in hours})
-            st.history.append({"at": datetime.utcnow().isoformat() + "Z", "source": source,
+            st.history.append({"at": utc_now_iso(), "source": source,
                                "blocked_grades": st.blocked_grades, "blocked_hours": st.blocked_hours})
             self.save(st)
             return st
@@ -87,13 +101,20 @@ class RiskStateStore:
         """Registra el resultado de un cierre. pnl < 0 suma a la racha; > 0 la reinicia."""
         with self._lock:
             st = self.load()
-            if pnl < 0:
+            pnl = float(pnl)
+            invalid_pnl = not math.isfinite(pnl)
+            # Fail-closed: un PnL no finito (NaN/inf) cuenta como pérdida; con NaN,
+            # ni pnl < 0 ni pnl > 0 son ciertos y la racha se saltaría en silencio.
+            if invalid_pnl or pnl < 0:
                 st.consecutive_losses += 1
             elif pnl > 0:
                 st.consecutive_losses = 0
-            st.last_close_at = at.isoformat()
-            st.history.append({"at": datetime.utcnow().isoformat() + "Z", "source": source,
-                               "close_pnl": float(pnl), "consecutive_losses": st.consecutive_losses})
+            st.last_close_at = _require_aware(at).isoformat()
+            event = {"at": utc_now_iso(), "source": source,
+                     "close_pnl": None if invalid_pnl else pnl, "consecutive_losses": st.consecutive_losses}
+            if invalid_pnl:
+                event["invalid_pnl"] = repr(pnl)
+            st.history.append(event)
             self.save(st)
             return st
 
@@ -101,7 +122,7 @@ class RiskStateStore:
         with self._lock:
             st = self.load()
             st.active_model_version = version
-            st.history.append({"at": datetime.utcnow().isoformat() + "Z", "source": source,
+            st.history.append({"at": utc_now_iso(), "source": source,
                                "active_model_version": version})
             self.save(st)
             return st
@@ -125,7 +146,7 @@ class RiskGuard:
         self.cooldown_minutes = float(cooldown_minutes)
 
     def record_close(self, pnl: float, now: datetime | None = None, source: str = "router") -> RiskState:
-        now = (now or datetime.now(tz=self.tz)).astimezone(self.tz)
+        now = _require_aware(now or datetime.now(tz=self.tz)).astimezone(self.tz)
         return self.store.record_close(pnl, now, source)
 
     def check_entry(self, equity: float, now: datetime | None = None, *,
@@ -133,14 +154,22 @@ class RiskGuard:
         """Devuelve (permitido, motivo, multiplicador_de_riesgo)."""
         if self.kill_switch_path and self.kill_switch_path.exists():
             return False, "kill_switch", 0.0
-        now = (now or datetime.now(tz=self.tz)).astimezone(self.tz)
+        now = _require_aware(now or datetime.now(tz=self.tz)).astimezone(self.tz)
+        if not _is_valid_equity(equity):
+            # Fail-closed: con equity NaN el breaker diario compara NaN >= límite (False)
+            # y dejaría pasar la entrada. Nunca se escribe como equity de inicio del día.
+            return False, "invalid_equity", 0.0
         today = now.date().isoformat()
         with self.store._lock:
             st = self.store.load()
-            if st.day != today or not st.day_start_equity:
+            if st.day != today:
                 # Día nuevo: la racha de pérdidas se reinicia con el día de sesión.
                 st.day, st.day_start_equity, st.consecutive_losses = today, equity, 0
                 self.store.save(st)
+            elif not _is_valid_equity(st.day_start_equity):
+                # Estado persistido corrupto (p. ej. NaN de una versión anterior). Reiniciar
+                # la base a mitad de día ocultaría las pérdidas ya sufridas: se bloquea.
+                return False, "invalid_day_start_equity", 0.0
         if st.risk_multiplier <= 0:
             return False, f"risk_zero:{st.halted_reason}", 0.0
         loss_pct = (st.day_start_equity - equity) / st.day_start_equity * 100.0

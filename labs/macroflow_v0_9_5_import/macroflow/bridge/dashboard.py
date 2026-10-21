@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 from dataclasses import asdict
-from datetime import datetime
+from macroflow.timeutil import utc_now_iso
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -80,7 +80,7 @@ def kill(body: KillBody, request: Request):
     p = request.app.state.settings.kill_switch_path
     p.parent.mkdir(parents=True, exist_ok=True)
     if body.on:
-        p.write_text(datetime.utcnow().isoformat())
+        p.write_text(utc_now_iso())
     elif p.exists():
         p.unlink()
     return {"kill_switch": p.exists()}
