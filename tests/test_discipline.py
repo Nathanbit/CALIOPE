@@ -107,3 +107,67 @@ class DisciplineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_PANDAS, "pandas no instalado")
+class CircuitBreakerAndCoachTests(unittest.TestCase):
+    def setUp(self):
+        import pre_trade_gate
+        import rules
+        import session_review
+        self.gate, self.rules, self.review = pre_trade_gate, rules, session_review
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def trades(self, rows):
+        p = Path(self.tmp.name) / "t.csv"
+        p.write_text(HEADER + "\n".join(rows) + "\n", encoding="utf-8")
+        return self.rules.load_trades(p, "America/Guayaquil")
+
+    def row(self, n, day, t_in, t_out, size, pnl, entry="29900", exit_="29890", tp="30000", sl="29850"):
+        return f"US100,{n},BUY,{size},{day}.10.2026 {t_in}:00,{day}.10.2026 {t_out}:00,{entry},{exit_},{tp},{sl},{pnl}"
+
+    def test_weekly_halt_releases_next_monday(self):
+        t = self.trades([self.row(1, "19", "09:00", "09:10", 0.01, -6.0),
+                         self.row(2, "20", "09:00", "09:10", 0.01, -6.0)])
+        br = self.rules.circuit_breaker(t, 40.0, self.rules.Rules(), at("19:55"))
+        self.assertEqual(br["state"], "HALTED")
+        self.assertTrue(any("semanal" in r for r in br["reasons"]))
+        self.assertTrue(br["release_at"].startswith("2026-10-26T00:00"))
+
+    def test_streak_is_cooldown_not_halt_and_expires(self):
+        t = self.trades([self.row(1, "20", "09:00", "09:10", 0.01, -0.1),
+                         self.row(2, "20", "09:20", "09:30", 0.01, -0.1)])
+        br = self.rules.circuit_breaker(t, 45.0, self.rules.Rules(), at("19:55"))
+        self.assertEqual(br["state"], "COOLDOWN")
+        self.assertTrue(br["release_at"].startswith("2026-10-20T21:30"))
+        later = datetime.fromisoformat("2026-10-20T21:31:00-05:00")
+        self.assertEqual(self.rules.circuit_breaker(t, 45.0, self.rules.Rules(), later)["state"], "TRADING_ALLOWED")
+
+    def test_watchlist_intent_is_not_an_order(self):
+        p = json.loads(json.dumps(PLAN))
+        p["intent"] = "WATCHLIST"
+        r = self.gate.evaluate(p, self.rules.Rules(), None, at("19:55"))
+        self.assertEqual(r["decision"], "NO_ACTIONABLE_ORDERS")
+
+    def test_coach_tags_revenge_fomo_and_premature_exit(self):
+        t = self.trades([
+            self.row(1, "20", "19:03", "19:20", 0.01, -0.4),                       # fomo: antes de 19:15
+            self.row(2, "20", "19:25", "19:40", 0.02, 0.38, entry="29893.1",      # revancha con más tamaño
+                     exit_="29930.8", tp="30005.7", sl="29924"),                   # y cierre manual protegido
+        ])
+        coach = self.review.review(t, "2026-10-20", self.rules.Rules())["coach"]
+        tags = {x["tag"]: x for x in coach["behavior_tags"]}
+        self.assertEqual(tags["revenge_trade"]["confidence"], "high")
+        self.assertEqual(tags["fomo_entry"]["confidence"], "low")
+        self.assertIn("premature_exit", tags)
+        self.assertEqual(coach["human_decision_gate"]["default"], "journal_only")
+        self.assertIn(coach["verdict"], {"REVIEW_REQUIRED", "RULE_VIOLATION", "COOL_DOWN"})
+
+    def test_clean_session_has_no_pattern(self):
+        t = self.trades([self.row(1, "20", "19:20", "19:50", 0.01, 0.8, exit_="30000", tp="30000")])
+        coach = self.review.review(t, "2026-10-20", self.rules.Rules())["coach"]
+        self.assertEqual(coach["verdict"], "OK")
+        self.assertEqual(coach["behavior_tags"][0]["tag"], "no_pattern_detected")

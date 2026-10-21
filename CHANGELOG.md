@@ -11,6 +11,12 @@
   - `caliope-backtest-review`: lista de verificación de backtests de MacroFlow.
 - `tools/discipline/`: scripts offline que usan esas skills; reutilizan el
   parser de SimpleFX de `audit/discretionary.py`.
+- Cortacircuitos de cuenta (diario/semanal/mensual con hora de liberación y
+  enfriamiento por racha), intención `WATCHLIST` → `NO_ACTIONABLE_ORDERS`, y
+  capa de coach en la revisión de sesión (etiquetas de comportamiento con
+  evidencia, veredicto escalonado y reglas propuestas con decisión humana).
+- `docs/reverse-engineering/`: método de sala limpia con REA (inventario con
+  procedencia) y pruebas de caja negra del comportamiento de las skills origen.
 - Ideas adaptadas de tradermonty/claude-trading-skills y wshobson/agents (MIT),
   encontradas vía skill-issue.in. No se copió código ni se instalaron scripts
   de terceros.

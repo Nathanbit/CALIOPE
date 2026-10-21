@@ -18,7 +18,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rules import DEFAULT_POINT_VALUE, Rules, day_slice, finite_number, in_windows, load_trades, losing_streak  # noqa: E402
+from rules import (DEFAULT_POINT_VALUE, Rules, circuit_breaker, day_slice, finite_number, in_windows,  # noqa: E402
+                   load_trades)
 
 CHECKLIST = {
     "range_marked": "rango de apertura marcado",
@@ -26,12 +27,18 @@ CHECKLIST = {
     "retest_confirmed": "retesteo confirmado con cierre",
     "news_clear": "sin noticia de alto impacto en los próximos minutos",
 }
-EXIT = {"GO": 0, "NO_GO": 2, "REVIEW_REQUIRED": 3}
+EXIT = {"GO": 0, "NO_ACTIONABLE_ORDERS": 0, "NO_GO": 2, "REVIEW_REQUIRED": 3}
+ACTIONABLE = {"ENTRY", "ENTRY_READY", "MANUAL_ORDER"}
 
 
 def evaluate(plan: dict, rules: Rules, trades=None, as_of: datetime | None = None) -> dict:
     tz = ZoneInfo(rules.tz)
     now = (as_of or datetime.now(tz)).astimezone(tz)
+    intent = str(plan.get("intent", "ENTRY")).upper()
+    if intent not in ACTIONABLE:
+        return {"evidence_kind": "derivation", "decision": "NO_ACTIONABLE_ORDERS", "as_of": now.isoformat(),
+                "blocking_reasons": [], "review_reasons": [], "metrics": {}, "plan": plan,
+                "rules": rules.to_dict(), "note": f"intención {intent}: se registra, no autoriza ninguna orden."}
     blocks: list[str] = []
     review: list[str] = []
     order = plan.get("order") or {}
@@ -95,22 +102,20 @@ def evaluate(plan: dict, rules: Rules, trades=None, as_of: datetime | None = Non
     if not in_windows(now, rules.session_windows):
         blocks.append(f"fuera de las ventanas de sesión ({now:%H:%M} {rules.tz})")
 
-    if trades is None:
-        review.append("sin historial del día: no se pueden verificar límites diarios ni venganza")
+    breaker = circuit_breaker(trades, equity, rules, now)
+    metrics["circuit_breaker"] = breaker
+    if breaker["state"] == "UNKNOWN":
+        review.append("sin historial del día: no se pueden verificar límites ni venganza")
     else:
+        blocks.extend(breaker["reasons"])
         today = day_slice(trades, now.date().isoformat(), rules.tz)
         today = today[today["exit_time"] <= now]
         open_now = int(plan.get("open_positions", 0) or 0)
         n = len(today) + open_now
-        streak = losing_streak(today["pnl"])
-        day_pnl = float(today["pnl"].sum())
-        metrics.update(trades_today=n, losing_streak=streak, day_pnl=round(day_pnl, 4))
+        metrics.update(trades_today=n, losing_streak=breaker["losing_streak"],
+                       day_pnl=breaker["periods"]["day"]["pnl"])
         if n >= rules.max_trades_per_day:
             blocks.append(f"ya hiciste {n} operaciones hoy (máximo {rules.max_trades_per_day})")
-        if streak >= rules.max_consecutive_losses:
-            blocks.append(f"{streak} pérdidas seguidas: sesión terminada")
-        if equity and day_pnl < 0 and -day_pnl / equity * 100 >= rules.max_daily_loss_pct:
-            blocks.append(f"pérdida del día {-day_pnl / equity * 100:.1f}% ≥ {rules.max_daily_loss_pct}%")
         losses = today[today["pnl"] < 0]
         if len(losses):
             mins = (now - losses["exit_time"].iloc[-1].tz_convert(tz)).total_seconds() / 60

@@ -1,0 +1,84 @@
+{
+  "tool": "rea-agents 6.7.0 import-reference-source --detail summary",
+  "source_repo": "https://github.com/tradermonty/claude-trading-skills",
+  "license": "MIT",
+  "skills": {
+    "drawdown-circuit-breaker": {
+      "vcs_head": "cb0f3aadffed6d1089db4b224162c964368baa46",
+      "manifest_id": "hsm_f55b35f51265e5de27c12641eb138ecb8c40e63bad5f41b9a1d6691073369dc9",
+      "graph_sha256": "b94f0d9d8f489c46dc057f17946ccadaa1de93d9aab71431298a226e1a1b10ce",
+      "root_sha256": "55b9c087e373517884feb04f526364e902ee14ed7f6caff53bb11d5ebdd39163",
+      "inventory_state": "partial",
+      "languages": [
+        "Markdown",
+        "Python",
+        "Text"
+      ],
+      "files": 8,
+      "bytes": 120545,
+      "relationships": 0
+    },
+    "pre-trade-discipline-gate": {
+      "vcs_head": "cb0f3aadffed6d1089db4b224162c964368baa46",
+      "manifest_id": "hsm_d1a84ff122227c1c05206a974c16e39086d24ec2abe243fefaba7f0caff253dc",
+      "graph_sha256": "9cc6154dc20e3e2cd6fa09401f6728a9e855860c83eecb26e2a3ffaa01f1fd78",
+      "root_sha256": "6111d21af9b1265a71919654a5afab1e4ab6de0f1dd03edefb43ef25d02fc047",
+      "inventory_state": "partial",
+      "languages": [
+        "Markdown",
+        "Python",
+        "Text"
+      ],
+      "files": 6,
+      "bytes": 64794,
+      "relationships": 0
+    },
+    "signal-postmortem": {
+      "vcs_head": "cb0f3aadffed6d1089db4b224162c964368baa46",
+      "manifest_id": "hsm_55f2d34f688999d1b5f7a8f69d810f05c658455364172a5e5b3d1dd68a263e4b",
+      "graph_sha256": "273d51ea50a8648d0532a0dfd8088445e54a7461b8771ef12b807d327bd38cb2",
+      "root_sha256": "66f532f88ca05afbc569dce144b559ba8fd3726103138b63a9aa4871aeeef7b2",
+      "inventory_state": "partial",
+      "languages": [
+        "Markdown",
+        "Python",
+        "Text"
+      ],
+      "files": 10,
+      "bytes": 82545,
+      "relationships": 0
+    },
+    "trade-performance-coach": {
+      "vcs_head": "cb0f3aadffed6d1089db4b224162c964368baa46",
+      "manifest_id": "hsm_5a60dadeba6d3a65b28c025e3e90af49571cb44f889ac61afa677f80144b5a03",
+      "graph_sha256": "d350ade522630b995317c9bb18f9d138aef4425743d076d75ddd528dda370b31",
+      "root_sha256": "91bfe6cce6807c88d8478e5320e229f3db5e9f365f877f0d80ec7a1d5f8c3261",
+      "inventory_state": "partial",
+      "languages": [
+        "JSON",
+        "Markdown",
+        "Python",
+        "Text"
+      ],
+      "files": 17,
+      "bytes": 77037,
+      "relationships": 0
+    },
+    "trader-memory-core": {
+      "vcs_head": "cb0f3aadffed6d1089db4b224162c964368baa46",
+      "manifest_id": "hsm_7f18988a3faa21b6607f305d2b7316be08ea5a9dfd4eb8efadeb87cb59edbbe9",
+      "graph_sha256": "2cff3e787bc038def03b896ae68fb47fb7decd0bb626ddb759cfe22c77f6cfe1",
+      "root_sha256": "a01221abd6d3d15a9ecf20671bc4fa22ba6100a888760578f63256086fc5d657",
+      "inventory_state": "partial",
+      "languages": [
+        "JSON",
+        "Markdown",
+        "Python",
+        "Text"
+      ],
+      "files": 18,
+      "bytes": 466958,
+      "relationships": 0
+    }
+  }
+}
