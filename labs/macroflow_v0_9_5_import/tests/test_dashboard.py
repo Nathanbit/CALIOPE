@@ -38,9 +38,28 @@ def test_panel_rejects_forwarded_requests(client):
     assert client.get("/api/state", headers={"X-Forwarded-For": "8.8.8.8"}).status_code == 403
 
 
-def test_optimizer_run_via_api(client):
-    assert client.post("/api/optimizer/run", json={"trials": 5, "min_oos_pf": 0, "require_positive_ci": False,
-                                                   "auto_approve": False, "interval_s": 5}).json()["started"]
+_RUN_BODY = {"trials": 5, "min_oos_pf": 0, "require_positive_ci": False,
+             "auto_approve": False, "interval_s": 5}
+
+
+def test_optimizer_blocked_by_default(client):
+    # Cuarentena: el optimizador experimental falla cerrado hasta la paridad Pine-Python.
+    r = client.post("/api/optimizer/run", json=_RUN_BODY)
+    assert r.status_code == 403
+    assert client.post("/api/loop/start", json=_RUN_BODY).status_code == 403
+
+
+@pytest.fixture
+def optimizer_client(tmp_path):
+    s = Settings(webhook_secret="s3cret", state_dir=tmp_path, registry_dir=tmp_path / "reg",
+                 enable_experimental_optimizer=True)
+    with TestClient(create_app(s, PaperBroker())) as c:
+        yield c
+
+
+def test_optimizer_run_via_api(optimizer_client):
+    client = optimizer_client
+    assert client.post("/api/optimizer/run", json=_RUN_BODY).json()["started"]
     for _ in range(600):
         j = client.get("/api/optimizer/status").json()
         if not j["busy"] and j["iterations"] >= 1:
@@ -49,5 +68,6 @@ def test_optimizer_run_via_api(client):
     assert j["report"] and j["report"]["status"] in {"candidate_pending", "rejected"}
     if j["report"]["status"] == "candidate_pending":
         v = j["report"]["version"]
-        assert client.get(f"/api/pine/{v}").status_code == 200
+        # Generación de Pine desactivada hasta la paridad Pine-Python (REVIEW_STATUS.md).
+        assert client.get(f"/api/pine/{v}").status_code == 404
         assert client.post("/api/approve", json={"version": v}).json()["active"] == v

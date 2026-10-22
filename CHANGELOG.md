@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.8.0 — 2026-10-21
+
+- Capa para Claude Code adaptada de ECC (affaan-m/ECC, MIT), selectiva para no
+  inflar el contexto: `CLAUDE.md` (importa `AGENTS.md`, mapa y economía de
+  contexto), reglas por ruta en `.claude/rules/` (`python.md`, `pine.md`) y
+  agentes revisores `caliope-reviewer`, `caliope-security-reviewer` y
+  `caliope-fail-closed-hunter`. Se reescribieron para CALIOPE; no se copiaron.
+- `.claude/hooks/guard.py` + `.claude/settings.json`: bloquean push forzado,
+  `--no-verify`, lectura de credenciales por shell, commits sin
+  `core.hooksPath=.githooks`, y edición de workflows de GitHub, de la allowlist
+  de seguridad y de cualquier archivo congelado en un `MANIFEST.sha256`.
+  Compilan los `.py` editados y exigen `doctor` al cerrar un turno con cambios.
+  Permisos que niegan leer `.env`, claves y credenciales.
+- `tools/verify.py` y skill `caliope-verify`: ejecutan solo las comprobaciones
+  que exige la tabla de `AGENTS.md` según los archivos cambiados y declaran lo
+  que no se verificó.
+- Seguridad: la herramienta `calc` de themis usaba `eval`; una expresión como
+  `9^9^9` bloqueaba el proceso. Ahora usa `themis/safe_calc.py` (AST con
+  límites de exponente, tamaño y profundidad).
+- Lab MacroFlow: `test_optimizer_run_via_api` estaba desfasado respecto a la
+  cuarentena (el optimizador responde 403 por defecto y no genera `.pine`).
+  Ahora hay una prueba del bloqueo por defecto y otra del flujo habilitado.
+- `.gitignore`: `/state/` (revisiones de sesión con P&L personal).
+
 ## 0.7.0 — 2026-10-20
 
 - Skills de proyecto en `.claude/skills/` (Claude Code las carga al abrir el repo):

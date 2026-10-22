@@ -103,6 +103,25 @@ de una orden manual y `tools/discipline/session_review.py` revisa la sesión
 desde el export de SimpleFX. Claude Code las usa mediante las skills de
 `.claude/skills/`. Ninguna envía órdenes.
 
+## Trabajar con Claude Code
+
+Capa adaptada de [ECC](https://github.com/affaan-m/ECC) (MIT) a las reglas de
+CALIOPE; no requiere instalar el plugin de ECC. Al abrir el repo, Claude Code
+carga `CLAUDE.md` (que importa `AGENTS.md`), las reglas de `.claude/rules/`
+solo al tocar `.py` o `.pine`, tres agentes revisores en contexto limpio
+(`caliope-reviewer`, `caliope-security-reviewer`, `caliope-fail-closed-hunter`)
+y los hooks de `.claude/settings.json`, que bloquean push forzado,
+`--no-verify`, lectura de credenciales y edición de archivos congelados.
+
+```powershell
+git config core.hooksPath .githooks   # una vez por clon; el hook de commit lo exige
+python tools/verify.py                # pruebas según lo que cambió
+python tools/verify.py --base main    # antes de abrir un PR
+```
+
+Los hooks llaman a `python`; si en Windows solo tienes `py`, crea un alias o
+ajusta los comandos en `.claude/settings.local.json`.
+
 ## Ocho revisores externos
 
 Cada run crea un paquete separado para estos revisores. Sus opiniones son
