@@ -138,3 +138,53 @@ def test_old_state_file_still_loads(tmp_path):
                              "updated_at": None, "history": []}))
     st = RiskStateStore(p).load()
     assert st.consecutive_losses == 0 and st.blocked_grades == []
+
+
+# --- Entradas no válidas: las compuertas fallan cerradas -----------------------
+
+def test_nan_pnl_counts_as_loss_for_streak(tmp_path):
+    store = RiskStateStore(tmp_path / "s.json")
+    g = RiskGuard(store, max_daily_loss_pct=50, max_consecutive_losses=2)
+    t0 = datetime(2026, 10, 20, 10, 0, tzinfo=NY)
+    assert g.check_entry(1000, t0)[0]
+    g.record_close(float("nan"), t0)
+    g.record_close(float("inf"), t0)
+    ok, reason, _ = g.check_entry(1000, t0)
+    assert not ok and reason == "loss_streak:2"
+    last = store.load().history[-1]
+    assert last["close_pnl"] is None and last["invalid_pnl"] == "inf"
+
+
+def test_nan_equity_blocks_and_never_becomes_day_start(tmp_path):
+    store = RiskStateStore(tmp_path / "s.json")
+    g = RiskGuard(store, max_daily_loss_pct=2)
+    t0 = datetime(2026, 10, 20, 10, 0, tzinfo=NY)
+    for bad in (float("nan"), float("inf"), 0.0, -5.0):
+        assert g.check_entry(bad, t0) == (False, "invalid_equity", 0.0)
+    assert store.load().day_start_equity is None
+    assert g.check_entry(1000, t0)[0]
+    ok, reason, _ = g.check_entry(900, t0)
+    assert not ok and reason.startswith("daily_loss_breaker")
+
+
+def test_corrupt_persisted_day_start_blocks_without_resetting_streak(tmp_path):
+    store = RiskStateStore(tmp_path / "s.json")
+    g = RiskGuard(store, max_daily_loss_pct=2, max_consecutive_losses=5)
+    t0 = datetime(2026, 10, 20, 10, 0, tzinfo=NY)
+    assert g.check_entry(1000, t0)[0]
+    g.record_close(-1, t0)
+    st = store.load()
+    st.day_start_equity = float("nan")
+    store.save(st)
+    assert g.check_entry(1000, t0) == (False, "invalid_day_start_equity", 0.0)
+    assert store.load().consecutive_losses == 1
+    # Día nuevo: la base se reconstruye con un equity válido.
+    assert g.check_entry(1000, t0 + timedelta(days=1))[0]
+
+
+def test_naive_datetimes_are_rejected(tmp_path):
+    g = RiskGuard(RiskStateStore(tmp_path / "s.json"), max_daily_loss_pct=50)
+    with pytest.raises(ValueError, match="naive"):
+        g.check_entry(1000, datetime(2026, 10, 20, 10, 0))
+    with pytest.raises(ValueError, match="naive"):
+        g.record_close(-1, datetime(2026, 10, 20, 10, 0))

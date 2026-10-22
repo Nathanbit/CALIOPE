@@ -24,7 +24,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from macroflow.timeutil import utc_now_iso
 from pathlib import Path
 from typing import Callable
 
@@ -140,7 +140,7 @@ class ModelRegistry:
     def register(self, params: dict, metrics: dict, status: str) -> str:
         idx = self.index()
         version = bump_patch(idx["latest"])
-        rec = {"version": version, "status": status, "created_at": datetime.utcnow().isoformat() + "Z",
+        rec = {"version": version, "status": status, "created_at": utc_now_iso(),
                "parent": idx["active"], "params": params, "metrics": metrics}
         (self.root / f"v{version}.json").write_text(json.dumps(rec, indent=2, default=str))
         idx["latest"] = version
@@ -150,7 +150,7 @@ class ModelRegistry:
 
     def activate(self, version: str) -> None:
         rec = self.get(version)
-        rec["status"], rec["activated_at"] = "active", datetime.utcnow().isoformat() + "Z"
+        rec["status"], rec["activated_at"] = "active", utc_now_iso()
         (self.root / f"v{version}.json").write_text(json.dumps(rec, indent=2, default=str))
         idx = self.index()
         if idx["active"] and idx["active"] != version:

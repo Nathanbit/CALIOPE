@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from macroflow.bridge.router import OrderRouter
 from macroflow.bridge.schemas import TVAlert
@@ -8,7 +8,7 @@ from macroflow.risk.guards import RiskGuard, RiskStateStore
 
 def _alert(i, action, grade="A"):
     kw = dict(secret="x", alert_id=f"a{i}", model_version="t", ticker="BTCUSDT", action=action,
-              grade=grade, price=60_000, bar_time=int(datetime.utcnow().timestamp() * 1000))
+              grade=grade, price=60_000, bar_time=int(datetime.now(timezone.utc).timestamp() * 1000))
     if action == "BUY":
         kw.update(sl=59_000, tp=[61_000])
     return TVAlert(**kw)

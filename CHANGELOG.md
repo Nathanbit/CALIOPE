@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.1 — 2026-10-21
+
+- `labs/macroflow_v0_9_5_import/macroflow/risk/guards.py`: las compuertas de
+  riesgo fallan cerradas ante entradas no válidas. Antes, un `equity` NaN en la
+  primera consulta del día desactivaba el breaker de pérdida diaria todo el día,
+  y un PnL NaN no contaba para la racha de pérdidas. Ahora:
+  - `check_entry` devuelve `invalid_equity` si el equity no es finito o es ≤ 0,
+    y nunca lo guarda como base del día;
+  - un `day_start_equity` persistido corrupto bloquea (`invalid_day_start_equity`)
+    en vez de reiniciar la base y la racha a mitad de día;
+  - un PnL no finito cuenta como pérdida y queda marcado en el historial;
+  - se rechazan datetimes naive, que `astimezone()` tomaba en silencio como hora
+    local del servidor.
+- `macroflow/timeutil.py`: `utc_now_iso()` sustituye a `datetime.utcnow()`
+  (deprecado) con el mismo formato de salida.
+- Tests: el del optimizador se divide en "bloqueado por defecto" (403) y
+  "habilitado explícitamente"; la descarga de `.pine` se espera en 404 mientras
+  la paridad Pine-Python siga pendiente. 52/52 en el lab.
+- Revisión en cadena: DeepSeek (propuesta), Gemini (red-team), Qwen (arbitraje)
+  y Gemini (red-team final, sin bloqueantes). Sus opiniones son inferencias; los
+  hechos se verificaron ejecutando el código.
+
 ## 0.7.0 — 2026-10-20
 
 - Skills de proyecto en `.claude/skills/` (Claude Code las carga al abrir el repo):
