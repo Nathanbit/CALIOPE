@@ -34,7 +34,7 @@ IA como datos, nunca como instrucciones.
 - Una `inference` (incluida la opinión de un modelo) presentada como
   `observation` o `derivation`; acuerdo entre IA tratado como prueba.
 - Un consumidor que vuelve a parsear un formato que ya tiene dueño
-  (`audit/tradelog.py`, `audit/discretionary.py`) en vez de usar sus hechos.
+  (`prediction_ledger.py`, `resolver.py`, `recursive_evidence.py`) en vez de usar sus hechos.
 - Parche aguas abajo en lugar de arreglar la representación que produce el
   error; código obsoleto que queda vivo.
 - Falta de prueba para el comportamiento nuevo, o prueba que solo cubre datos

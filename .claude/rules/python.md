@@ -11,8 +11,9 @@ Condensado de `rules/common` y `rules/python` de ECC (affaan-m/ECC, MIT); manda
   `tools/`, `.claude/hooks/`): solo biblioteca estándar, Python 3.11+. Pruebas
   con `unittest` en `tests/`.
 - `archive/`: sin mantenimiento. No importes nada de `archive/` desde el núcleo.
-- Anotaciones de tipo en funciones públicas; `@dataclass(frozen=True)` para
-  registros de evidencia y resultados.
+- Anotaciones de tipo en funciones públicas. Los registros de evidencia son
+  dicts validados por su dueño y sellados con JSON canónico + SHA-256; no se
+  mutan después de escritos.
 - Errores: captura excepciones concretas; nada de `except: pass`. Un dato que
   falta se reporta como desconocido o hace fallar la compuerta, nunca se
   rellena con un valor por defecto.

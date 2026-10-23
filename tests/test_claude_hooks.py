@@ -49,6 +49,24 @@ class GuardTests(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(self.bash(cmd).returncode, 2)
 
+    def test_blocks_audit_bypasses(self):
+        """Variants confirmed by the 2026-10-23 audit as slipping through."""
+        for cmd in ("git push -uf origin main", 'git commit -m "a;b" --no-verify',
+                    "git -c core.hooksPath=/dev/null commit -m x",
+                    "echo {} >> projects/macroflow/predictions/ledger.jsonl",
+                    "sed -i 's/0.5/0.9/' projects/macroflow/predictions/ledger.jsonl",
+                    "python -c \"open('.env').read()\""):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.bash(cmd).returncode, 2)
+
+    def test_allows_ledger_cli_and_reads(self):
+        for cmd in ("python prediction_ledger.py --ledger projects/macroflow/predictions/ledger.jsonl score",
+                    "cat projects/macroflow/predictions/ledger.jsonl",
+                    "sha256sum projects/macroflow/predictions/ledger.jsonl",
+                    "git config core.hooksPath .githooks"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.bash(cmd).returncode, 0, self.bash(cmd).stderr)
+
     def test_blocks_reading_credentials(self):
         for cmd in ("cat .env", "type secrets/broker.txt", "head -n1 deploy.pem", "cp id_rsa /tmp/x"):
             with self.subTest(cmd=cmd):

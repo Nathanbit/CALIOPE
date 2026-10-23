@@ -19,8 +19,8 @@ cerrados.
    rechazo.
 3. **Compuertas abiertas por defecto:** condición que deja pasar cuando no
    puede evaluar (`if data and data["x"] > lim` deja pasar si `data` está
-   vacío). Comprueba que `NO_GO` siga teniendo prioridad sobre
-   `REVIEW_REQUIRED` en `tools/discipline/`.
+   vacío). Comprueba que `check()` de `prediction_ledger.py` y el resolutor
+   rechacen datos ausentes en vez de leerlos como "no pasó nada".
 4. **Transiciones de estado:** el runner no debe avanzar etapa, consumir
    presupuesto ni aceptar `human_review` sin las precondiciones; el ledger no
    debe omitir una validación fallida en una promoción.
