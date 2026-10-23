@@ -53,6 +53,13 @@ CLOCK_SKEW_SECONDS = 300
 LOCK_TIMEOUT_SECONDS = 10.0
 HEX64 = re.compile(r"[0-9a-fA-F]{64}")
 COMMIT = re.compile(r"[0-9a-fA-F]{7,40}")
+# Who forecasts. A person is a bare name ("nathan"); everything else carries
+# its kind, so a model, an indicator, a simulation and an outside expert are
+# never confused and each keeps its own chain and score: "ia:gemini",
+# "indicador:macroflow", "sim:mirofish", "experto:fulano". Lower case only:
+# "Gemini" and "gemini" are one author.
+AUTHOR_KINDS = ("ia", "indicador", "sim", "experto")
+AUTHOR = re.compile(r"[a-z0-9][a-z0-9_.-]{0,39}(?::[a-z0-9][a-z0-9_.-]{0,39})?")
 
 
 class GateError(Exception):
@@ -101,6 +108,20 @@ def question_id(text: str, horizon_end: str, source: str, criteria: str,
 
 def lesson_id(text: str, scope: str) -> str:
     return "l-" + sha256_text(canonical({"text": text.strip(), "scope": scope.strip()}))[:16]
+
+
+def normalize_author(name: str | None) -> str:
+    return (name or "").strip().lower()
+
+
+def _author(record: dict, field: str = "author") -> str:
+    author = _text(record, field)
+    if not AUTHOR.fullmatch(author):
+        raise GateError(f"{field} must be a lower-case name or kind:name, e.g. nathan, "
+                        f"ia:gemini, indicador:macroflow (got {author!r})")
+    if ":" in author and author.split(":", 1)[0] not in AUTHOR_KINDS:
+        raise GateError(f"{field} kind must be one of {AUTHOR_KINDS}")
+    return author
 
 
 def _text(record: dict, field: str) -> str:
@@ -221,7 +242,7 @@ def _check_forecast(state: State, record: dict, recorded: datetime) -> None:
     if qid in state.resolutions:
         raise GateError("question already resolved: forecasts after the outcome are refused")
     question = state.questions[qid]
-    author = _text(record, "author")
+    author = _author(record)
     if "thought_state" in record:
         if record.get("sealed_evidence") is not None:
             raise GateError("backdated forecasts cannot carry a thought state")
@@ -291,6 +312,8 @@ def _check_resolution(state: State, record: dict, recorded: datetime) -> None:
 
 def _check_lesson(state: State, record: dict) -> None:
     text, scope = _text(record, "text"), _text(record, "scope")
+    if scope != "*":
+        _author(record, "scope")
     _text(record, "proposed_by")
     evidence = record.get("evidence_questions")
     if not isinstance(evidence, list) or not evidence:
@@ -490,7 +513,7 @@ def _forecast_body(qid: str, author: str, probability: float | None, rationale: 
         status, probability = FAILURE, None  # never coerced to 0.5, never dropped
     now = utc_now_iso()
     made = iso_utc(parse_time(made_at, "made_at")) if made_at is not None else now
-    body = {"type": "forecast", "question_id": qid, "author": (author or "").strip(),
+    body = {"type": "forecast", "question_id": qid, "author": normalize_author(author),
             "probability": probability, "status": status, "rationale": (rationale or "").strip(),
             "made_at": made, "sealed_evidence": sealed_evidence,
             "lessons_applied": sorted(set(lessons_applied or [])), "recorded_at": now}
@@ -551,8 +574,8 @@ def propose_lesson(path: Path, text: str, scope: str, evidence_questions: list[s
                    proposed_by: str) -> dict:
     """A lesson must cite resolved questions; ``scope`` is an author or ``*``."""
     def build(_: State) -> dict:
-        return {"type": "lesson", "lesson_id": lesson_id(text or "", scope or ""),
-                "text": (text or "").strip(), "scope": (scope or "").strip(),
+        return {"type": "lesson", "lesson_id": lesson_id(text or "", normalize_author(scope)),
+                "text": (text or "").strip(), "scope": normalize_author(scope),
                 "evidence_questions": sorted(set(evidence_questions or [])),
                 "proposed_by": (proposed_by or "").strip(), "evidence_type": "inference",
                 "recorded_at": utc_now_iso()}
@@ -612,7 +635,7 @@ def _state_command(args: argparse.Namespace) -> dict:
         if args.question not in state.questions:
             raise GateError(f"unknown question {args.question}")
         label = state.questions[args.question].get("concept_class")
-    return fs.thought_state(state, args.author.strip(), label)
+    return fs.thought_state(state, normalize_author(args.author), label)
 
 
 def _verify_command(args: argparse.Namespace) -> dict:
@@ -672,6 +695,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--klines", required=True, type=Path)
     p.set_defaults(run=lambda a: resolve_auto(a.ledger, a.question, a.klines))
     sub.add_parser("score").set_defaults(run=_read_only(fs.score))
+    p = sub.add_parser("rival", help="each author against a rival that only knows the past")
+    p.add_argument("--resamples", type=int, default=2000)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--min-n", type=int, default=30)
+    p.set_defaults(run=lambda a: _read_only(
+        lambda r: fs.rival(r, a.resamples, a.seed, a.min_n))(a))
     p = sub.add_parser("state", help="the author's continuous thought state now")
     p.add_argument("--author", required=True)
     p.add_argument("--question", help="use this question's concept class")

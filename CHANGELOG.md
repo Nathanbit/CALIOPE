@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.0 — 2026-10-23
+
+Autores con identidad y rival base con bootstrap.
+
+- Autores en minúsculas con tipo: persona (`nathan`), `ia:`, `indicador:`,
+  `sim:` y `experto:`. Se normalizan al escribir y `verify` rechaza tipos
+  desconocidos o nombres con espacios; el `scope` de las lecciones usa la
+  misma identidad.
+- `rival`: ventaja de Brier de cada autor sobre la historia previa de su
+  clase de concepto, con intervalo bootstrap del 95% y semilla fija.
+  Veredicto solo con 30 casos o más y un intervalo que excluya el cero.
+- MiroFish (simulación multiagente) se puede medir como autor `sim:`.
+  6 tests nuevos.
+
 ## 0.16.0 — 2026-10-23
 
 Estado continuo entre pronósticos (idea de *Chain of Continuous Thought*,

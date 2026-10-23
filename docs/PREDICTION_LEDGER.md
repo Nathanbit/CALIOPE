@@ -152,7 +152,33 @@ pregunta; NaN e infinito nunca se guardan; los argumentos JSON son en línea o
 - **Descomposición de Murphy**: Brier = fiabilidad − resolución +
   incertidumbre, con el residuo dentro de cada bin para poder comprobar la
   identidad, y el error de calibración esperado (ECE).
+- **Rival base con bootstrap** (`rival`): cada pronóstico se compara con lo
+  que habría dicho la historia sola, es decir, la tasa con la que las
+  preguntas de su misma clase de concepto (o todas, si no tiene clase)
+  resolvieron `true` **antes** de sellarlo, contraída hacia 0,5. La ventaja
+  media de Brier lleva un intervalo bootstrap del 95% con semilla fija. El
+  veredicto es `beats_rival` o `worse_than_rival` solo si el intervalo
+  excluye el cero y hay al menos 30 casos; si no, `undistinguished` o
+  `insufficient`. Una racha de suerte no es habilidad.
 - `void` y `failure` se cuentan aparte; nunca se puntúan como aciertos.
+
+## Autores
+
+Cada autor tiene una identidad en minúsculas, y su cadena, su estado continuo
+y su puntuación son propios:
+
+| Autor | Ejemplo |
+|---|---|
+| Persona | `nathan` |
+| Modelo de IA | `ia:gemini`, `ia:chatgpt`, `ia:claude` |
+| Indicador | `indicador:macroflow` |
+| Simulación multiagente | `sim:mirofish` |
+| Experto externo | `experto:fulano` |
+
+`" IA:Gemini "` se guarda como `ia:gemini`; un tipo desconocido o un nombre
+con espacios se rechaza. Para que un indicador o una simulación compitan,
+alguien tiene que reducir su salida a una probabilidad y sellarla **antes**
+del resultado. El acuerdo entre varios autores no convierte nada en hecho.
 - Con menos de 30 pronósticos puntuados, el informe lo advierte: la
   calibración todavía no significa nada.
 
@@ -262,6 +288,10 @@ Ningún código se copió; las ideas se reimplementaron desde cero:
   muestra pequeña. La identidad es de Murphy (1973).
 - [Lista de comprobación de Metaculus](https://www.metaculus.com/help/question-checklist/):
   fechas absolutas, fuente y criterio de resolución explícitos.
+- [666ghj/MiroFish](https://github.com/666ghj/MiroFish) (AGPL-3.0, no se
+  copió nada): motor de predicción por enjambre de agentes. Su README no
+  incluye cómo medir los aciertos; CALIOPE lo trata como un autor más
+  (`sim:`) para medirlo.
 - [google-research/harness2](https://github.com/google-research/harness2)
   (Apache-2.0): memoria persistente de lecciones respaldadas por evidencia
   que guía el trabajo futuro y se juzga a sí misma.

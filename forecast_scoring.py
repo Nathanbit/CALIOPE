@@ -10,6 +10,7 @@ Standard library only.
 from __future__ import annotations
 
 import math
+import random
 
 import prediction_ledger as pl
 
@@ -267,3 +268,67 @@ def thought_state(state: "pl.State", author: str, concept_class: str | None,
             "author_class_n": len(own_class), "author_class_brier": rounded(brier(own_class)),
             "adopted_lessons": lessons,
             "parent": max(previous, key=lambda r: r["seq"])["hash"] if previous else None}
+
+
+RIVAL_PRIOR = 2.0
+
+
+def _rival_probabilities(records: list[dict]) -> dict[tuple[str, str], float]:
+    """The base rival: for each scored forecast, the rate at which questions
+    of the same concept class (or, without a class, all questions) had
+    resolved true *before that forecast was sealed*, shrunk toward 0.5 with
+    ``RIVAL_PRIOR`` pseudo-observations. It never sees the future, so beating
+    it means knowing more than history, not just repeating it."""
+    questions, _, resolutions = pl.index(records)
+    done = sorted((r["seq"], qid, r["outcome"] == "true") for qid, r in resolutions.items()
+                  if r["outcome"] != "void")
+    pairs, _ = scored_pairs(records)
+    out = {}
+    for x in pairs:
+        label = x["concept_class"]
+        history = [hit for seq, qid, hit in done if seq < x["seq"]
+                   and (label is None or questions[qid].get("concept_class") == label)]
+        out[(x["question_id"], x["author"])] = (sum(history) + RIVAL_PRIOR * 0.5) \
+            / (len(history) + RIVAL_PRIOR)
+    return out
+
+
+def rival(records: list[dict], resamples: int = 2000, seed: int = 0, min_n: int = 30) -> dict:
+    """Does each author beat the base rival on the same questions?
+
+    Paired Brier difference (rival minus author: positive means the author
+    is better), with a percentile bootstrap interval over questions. The
+    seed is fixed so the report is reproducible. ``verdict`` stays
+    ``insufficient`` below ``min_n`` and ``undistinguished`` while the 95%
+    interval contains zero: a lucky streak is not skill."""
+    if resamples < 100:
+        raise pl.GateError("resamples must be at least 100")
+    pairs, _ = scored_pairs(records)
+    rival_p = _rival_probabilities(records)
+    rng = random.Random(seed)
+    board = []
+    for author in sorted({x["author"] for x in pairs}):
+        own = [x for x in pairs if x["author"] == author]
+        diffs = [(rival_p[(x["question_id"], author)] - x["y"]) ** 2 - (x["p"] - x["y"]) ** 2
+                 for x in own]
+        n = len(diffs)
+        mean = sum(diffs) / n
+        means = sorted(sum(rng.choice(diffs) for _ in range(n)) / n for _ in range(resamples))
+        low, high = means[int(0.025 * resamples)], means[int(0.975 * resamples) - 1]
+        rival_brier = brier([dict(x, p=rival_p[(x["question_id"], author)]) for x in own])
+        if n < min_n:
+            verdict = "insufficient"
+        elif low > 0:
+            verdict = "beats_rival"
+        elif high < 0:
+            verdict = "worse_than_rival"
+        else:
+            verdict = "undistinguished"
+        board.append({"author": author, "n": n, "brier": round(brier(own), 6),
+                      "rival_brier": round(rival_brier, 6),
+                      "skill": None if rival_brier == 0 else round(1 - brier(own) / rival_brier, 6),
+                      "mean_advantage": round(mean, 6),
+                      "ci95": [round(low, 6), round(high, 6)], "verdict": verdict})
+    return {"rival": "class history before each forecast, shrunk to 0.5 "
+                     f"(prior {RIVAL_PRIOR})", "resamples": resamples, "seed": seed,
+            "min_n": min_n, "authors": board, "evidence_type": "derivation"}

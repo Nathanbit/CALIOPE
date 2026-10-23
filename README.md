@@ -39,6 +39,14 @@ de verdad mejoraron los pronósticos.
    empeoran, CALIOPE propone retirarla; no la retira solo. Una lección nunca
    se evalúa con los datos que la originaron.
 
+### Autores y rival base
+
+Personas, IAs (`ia:gemini`), indicadores (`indicador:macroflow`),
+simulaciones (`sim:mirofish`) y expertos (`experto:x`) compiten en el mismo
+registro. `rival` compara a cada uno con lo que habría dicho la historia
+sola, con un intervalo bootstrap: solo con 30 casos o más y un intervalo que
+no cruce el cero se dice que alguien "le gana al rival".
+
 ### Conceptos y estado continuo
 
 - **Conceptos** (idea del *Large Concept Model* de Meta FAIR): una predicción
