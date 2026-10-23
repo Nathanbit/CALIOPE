@@ -34,6 +34,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import resolver
+
 GENESIS = "0" * 64
 OUTCOMES = ("true", "false", "void")
 FAILURE = "failure"
@@ -76,10 +78,14 @@ def utc_now_iso() -> str:
 CLOCK_SKEW_SECONDS = 300
 
 
-def question_id(text: str, horizon_end: str, source: str, criteria: str) -> str:
-    """Rewording any defining field yields a different question."""
+def question_id(text: str, horizon_end: str, source: str, criteria: str,
+                rule: dict | None = None) -> str:
+    """Rewording any defining field, including the machine rule, yields a
+    different question. Questions without a rule keep their original id."""
     body = {"text": text.strip(), "horizon_end": horizon_end, "source": source.strip(),
             "criteria": criteria.strip()}
+    if rule is not None:
+        body["rule"] = rule
     return "q-" + sha256_text(canonical(body))[:16]
 
 
@@ -138,7 +144,8 @@ def index(records: list[dict]) -> tuple[dict, dict, dict]:
 # ── Commands that write ─────────────────────────────────────────────────────
 
 def ask(path: Path, text: str, horizon_end: str, source: str, criteria: str,
-        base_rate: float | None = None, project: str | None = None) -> dict:
+        base_rate: float | None = None, project: str | None = None,
+        rule: dict | None = None) -> dict:
     records = load(path)
     verify(records)
     parse_time(horizon_end, "horizon_end")
@@ -147,14 +154,19 @@ def ask(path: Path, text: str, horizon_end: str, source: str, criteria: str,
             raise GateError(f"{field} is required: a question must say how it resolves")
     if base_rate is not None and not 0.0 < base_rate < 1.0:
         raise GateError("base_rate must be strictly between 0 and 1")
-    qid = question_id(text, horizon_end, source, criteria)
+    if rule is not None:
+        try:
+            rule = resolver.validate_rule(rule, horizon_end)
+        except resolver.ResolutionError as exc:
+            raise GateError(str(exc)) from exc
+    qid = question_id(text, horizon_end, source, criteria, rule)
     questions, _, _ = index(records)
     if qid in questions:
         raise GateError(f"{qid} already exists")
     return append(path, records, {
         "type": "question", "question_id": qid, "text": text.strip(),
         "horizon_end": horizon_end, "source": source.strip(), "criteria": criteria.strip(),
-        "base_rate": base_rate, "project": project, "recorded_at": utc_now_iso(),
+        "base_rate": base_rate, "project": project, "rule": rule, "recorded_at": utc_now_iso(),
     })
 
 
@@ -226,6 +238,28 @@ def resolve(path: Path, qid: str, outcome: str, observed: dict, resolved_at: str
         "void_reason": void_reason, "observed": observed, "resolved_at": when,
         "recorded_at": utc_now_iso(),
     })
+
+
+def resolve_auto(path: Path, qid: str, klines_path: Path) -> dict:
+    """Resolve from observed candles with the question's own rule. The
+    resolver sees only the rule and the data, never the forecasts."""
+    records = load(path)
+    verify(records)
+    questions, _, _ = index(records)
+    if qid not in questions:
+        raise GateError(f"unknown question {qid}")
+    question = questions[qid]
+    if not question.get("rule"):
+        raise GateError("question has no machine rule: resolve it manually with evidence")
+    try:
+        data, data_sha = resolver.load_klines(klines_path)
+        outcome, evidence = resolver.evaluate(question["rule"], question["horizon_end"], data)
+    except (OSError, resolver.ResolutionError) as exc:
+        raise GateError(f"automatic resolution refused: {exc}") from exc
+    observed = dict(evidence, source=f"klines file ({data.get('source', 'unknown source')})",
+                    data_sha256=data_sha, data_fetched_at=data.get("fetched_at"),
+                    resolver="resolver.py", resolver_version=resolver.RESOLVER_VERSION)
+    return resolve(path, qid, outcome, observed, void_reason=evidence.get("void_reason"))
 
 
 # ── Scoring ─────────────────────────────────────────────────────────────────
@@ -501,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--criteria", required=True)
     p.add_argument("--base-rate", type=float)
     p.add_argument("--project")
+    p.add_argument("--rule", help="machine rule as JSON or a path to it (see resolver.py)")
     p = sub.add_parser("forecast")
     p.add_argument("--question", required=True)
     p.add_argument("--author", required=True)
@@ -515,6 +550,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--observed", required=True)
     p.add_argument("--resolved-at")
     p.add_argument("--void-reason")
+    p = sub.add_parser("resolve-auto")
+    p.add_argument("--question", required=True)
+    p.add_argument("--klines", required=True, type=Path)
     sub.add_parser("score")
     p = sub.add_parser("learn")
     p.add_argument("--min-n", type=int, default=30)
@@ -541,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
                    "head": records[-1]["hash"] if records else GENESIS}
         elif args.command == "ask":
             out = ask(args.ledger, args.text, args.horizon_end, args.source, args.criteria,
-                      args.base_rate, args.project)
+                      args.base_rate, args.project, _json_arg(args.rule))
         elif args.command == "forecast":
             out = forecast(args.ledger, args.question, args.author, args.probability,
                            args.rationale, args.made_at, _json_arg(args.sealed_evidence),
@@ -549,6 +587,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "resolve":
             out = resolve(args.ledger, args.question, args.outcome, _json_arg(args.observed),
                           args.resolved_at, args.void_reason)
+        elif args.command == "resolve-auto":
+            out = resolve_auto(args.ledger, args.question, args.klines)
         elif args.command == "lesson-propose":
             out = propose_lesson(args.ledger, args.text, args.scope,
                                  [x.strip() for x in args.evidence.split(",") if x.strip()],

@@ -33,6 +33,7 @@ ROOT_TEST_PREFIXES = (
     "caliope_loop.py",
     "recursive_evidence.py",
     "prediction_ledger.py",
+    "resolver.py",
     "contracts/",
     "workflows/",
     "tests/",

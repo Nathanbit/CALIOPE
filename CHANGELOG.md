@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0 — 2026-10-22
+
+- `resolver.py`: reglas legibles por máquina (`touch_first`, `touch`,
+  `close_beyond`) evaluadas sobre velas sin ver los pronósticos. Falla cerrado
+  ante velas faltantes, símbolo o intervalo distintos, precios inválidos o
+  reglas no alineadas; dos niveles en la misma vela dan `void`.
+- `prediction_ledger.py`: `ask --rule` (la regla forma parte del id) y
+  `resolve-auto --klines`, que registra el SHA-256 de los datos y la versión
+  del resolutor.
+- `tools/fetch_klines.py`: descarga velas públicas de Binance desde el PC de la
+  persona (sin claves), paginadas.
+- Verificación: 11 tests nuevos; `tools/verify.py --all` en verde.
+
 ## 0.11.1 — 2026-10-22
 
 - `README.md` reescrito: qué es CALIOPE, sus cuatro piezas, cómo empezar,
