@@ -45,7 +45,9 @@ Personas, IAs (`ia:gemini`), indicadores (`indicador:macroflow`),
 simulaciones (`sim:mirofish`) y expertos (`experto:x`) compiten en el mismo
 registro. `rival` compara a cada uno con lo que habría dicho la historia
 sola, con un intervalo bootstrap: solo con 30 casos o más y un intervalo que
-no cruce el cero se dice que alguien "le gana al rival".
+no cruce el cero se dice que alguien "le gana al rival". El enjambre
+(`~enjambre`, la media en log-odds de todos los autores de una pregunta) se
+mide igual: la idea de [MiroFish](docs/MIROFISH_REA.md), pero con marcador.
 
 ### Conceptos y estado continuo
 
