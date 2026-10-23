@@ -39,7 +39,8 @@ Todo informe, revisión o salida de herramienta separa cuatro tipos:
   hechos ya parseados en vez de reinterpretar el archivo bruto:
   `prediction_ledger.py` para el ledger de predicciones, `resolver.py` para
   reglas y velas, `recursive_evidence.py` para el ledger de operaciones y
-  `caliope_loop.py` para los expedientes del runner.
+  `caliope_loop.py` para los expedientes del runner y `evidence_io.py` para
+  el formato `sha256sum` de los manifiestos y las primitivas comunes.
 - Al corregir un error, arregla la representación que lo produce antes de
   añadir parches aguas abajo, y elimina el código que quede obsoleto.
 - Los fallos esperados se modelan explícitamente y fallan cerrados.

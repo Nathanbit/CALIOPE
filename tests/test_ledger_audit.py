@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
 import fetch_klines  # noqa: E402
+import forecast_scoring as fs  # noqa: E402
 import prediction_ledger as pl  # noqa: E402
 import resolver  # noqa: E402
 
@@ -121,7 +122,7 @@ class AuditTest(unittest.TestCase):
         for _ in range(50):
             pl.forecast(self.path, qid, "spammer", 0.99, "r")
         self.resolve_later(qid)
-        report = pl.score(pl.load(self.path))
+        report = fs.score(pl.load(self.path))
         self.assertEqual(report["scoreboard"][0]["brier"], 0.25)
         self.assertEqual(report["counts"]["repeat_forecasts_ignored"], 50)
 
@@ -137,7 +138,7 @@ class AuditTest(unittest.TestCase):
 
     # HIGH 9: NaN never reaches the ledger
     def test_nan_is_refused(self):
-        with self.assertRaisesRegex(pl.GateError, "not valid JSON"):
+        with self.assertRaisesRegex(pl.GateError, "non-finite"):
             pl.json_arg('{"source": "x", "v": NaN}')
         qid = self.q()
         pl.forecast(self.path, qid, "a", 0.5, "r")

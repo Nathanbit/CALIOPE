@@ -10,6 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import forecast_scoring as fs  # noqa: E402
 import prediction_ledger as pl  # noqa: E402
 
 H = "2026-10-22T00:15:00Z"
@@ -94,7 +95,7 @@ class LedgerTest(unittest.TestCase):
         self.assertIsNone(rec["probability"])
         self._sealed_forecast(qid, 0.6)
         pl.resolve(self.path, qid, "true", OBS, resolved_at="2026-10-22T00:21:00Z")
-        report = pl.score(pl.load(self.path))
+        report = fs.score(pl.load(self.path))
         self.assertEqual(report["counts"]["failures"], 1)
         board = {r["author"]: r for r in report["scoreboard"]}
         self.assertEqual(board["claude"]["n"], 1)
@@ -106,7 +107,7 @@ class LedgerTest(unittest.TestCase):
         self._sealed_forecast(qid, 0.55)
         pl.resolve(self.path, qid, "void", OBS, resolved_at="2026-10-22T00:21:00Z",
                    void_reason="neither level touched")
-        report = pl.score(pl.load(self.path))
+        report = fs.score(pl.load(self.path))
         self.assertEqual(report["counts"]["void"], 1)
         self.assertEqual(report["scoreboard"], [])
         self.assertIsNone(report["calibration"])
@@ -114,14 +115,14 @@ class LedgerTest(unittest.TestCase):
     def test_brier_is_proper_and_murphy_identity_holds(self):
         world = 0.7
         ys = [1.0] * 70 + [0.0] * 30
-        scores = {p / 100: pl.brier([{"p": p / 100, "y": y} for y in ys]) for p in range(101)}
+        scores = {p / 100: fs.brier([{"p": p / 100, "y": y} for y in ys]) for p in range(101)}
         self.assertAlmostEqual(min(scores, key=scores.get), world)
         rng = random.Random(7)
         pairs = []
         for _ in range(400):
             p = rng.choice([0.1, 0.3, 0.5, 0.7, 0.9])
             pairs.append({"p": p, "y": 1.0 if rng.random() < p else 0.0})
-        m = pl.murphy(pairs)
+        m = fs.murphy(pairs)
         self.assertAlmostEqual(m["within_bin_residual"], 0.0, places=12)
         self.assertAlmostEqual(m["brier"], m["reliability"] - m["resolution"] + m["uncertainty"])
 
@@ -132,29 +133,29 @@ class LedgerTest(unittest.TestCase):
             pl.resolve(self.path, qid, "true" if i < 6 else "false", OBS,
                        resolved_at="2026-10-22T00:21:00Z")
         before = self.path.read_text(encoding="utf-8")
-        result = pl.learn(pl.load(self.path), min_n=30)
+        result = fs.learn(pl.load(self.path), min_n=30)
         self.assertTrue(result["observation_only"])
         self.assertFalse(result["automatic_edit"])
         lesson = result["lessons"][0]
         self.assertFalse(lesson["ready"])
         self.assertIn("12/30", lesson["proposal"])
-        ready = pl.learn(pl.load(self.path), min_n=10, prior_strength=20.0)["lessons"][0]
+        ready = fs.learn(pl.load(self.path), min_n=10, prior_strength=20.0)["lessons"][0]
         self.assertTrue(ready["ready"])
         # 6 hits of 12 at 0.8 stated, shrunk toward 0.8 with 20 pseudo-observations
         self.assertAlmostEqual(ready["shrunk_freq"], round((6 + 20 * 0.8) / 32, 4))
         self.assertEqual(self.path.read_text(encoding="utf-8"), before, "learn must never write the ledger")
 
     def test_doctor_fails_on_tampered_ledger(self):
-        import caliope_loop
+        import caliope_doctor
         project = Path(self.tmp.name) / "projects" / "demo" / "predictions"
         ledger = project / "ledger.jsonl"
         qid = pl.ask(ledger, "Q", "2099-01-01T00:00:00Z", "s", "c")["question_id"]
         pl.forecast(ledger, qid, "a", 0.5, "r")
-        with mock.patch.object(caliope_loop, "ROOT", Path(self.tmp.name)):
-            self.assertEqual([c["status"] for c in caliope_loop._check_prediction_ledgers()], ["pass"])
+        with mock.patch.object(caliope_doctor, "ROOT", Path(self.tmp.name)):
+            self.assertEqual([c["status"] for c in caliope_doctor._check_prediction_ledgers()], ["pass"])
             ledger.write_text(ledger.read_text(encoding="utf-8").replace('"probability":0.5', '"probability":0.9'),
                               encoding="utf-8")
-            self.assertEqual([c["status"] for c in caliope_loop._check_prediction_ledgers()], ["fail"])
+            self.assertEqual([c["status"] for c in caliope_doctor._check_prediction_ledgers()], ["fail"])
 
     # Lessons (second recursion level)
     FUT = "2099-01-01T00:00:00Z"
@@ -202,14 +203,14 @@ class LedgerTest(unittest.TestCase):
             with mock.patch.object(pl, "now_utc", return_value=FAR):
                 pl.resolve(self.path, qid, "true" if i % 2 else "false", OBS,
                            resolved_at="2099-01-02T00:00:00Z")
-        report = pl.score_lessons(pl.load(self.path), min_n=4)
+        report = fs.score_lessons(pl.load(self.path), min_n=4)
         row = report["lessons"][0]
         self.assertEqual((row["n_before"], row["n_after"]), (4, 4))
         self.assertAlmostEqual(row["brier_before"], (0.01 + 0.81) / 2)
         self.assertAlmostEqual(row["brier_after"], (0.16 + 0.36) / 2)
         self.assertEqual(row["verdict"], "helps")
         self.assertTrue(report["observation_only"])
-        self.assertEqual(pl.score_lessons(pl.load(self.path))["lessons"][0]["verdict"], "insufficient")
+        self.assertEqual(fs.score_lessons(pl.load(self.path))["lessons"][0]["verdict"], "insufficient")
 
     def test_lesson_that_hurts_is_proposed_for_retirement(self):
         for i in range(4):
@@ -223,7 +224,7 @@ class LedgerTest(unittest.TestCase):
             with mock.patch.object(pl, "now_utc", return_value=FAR):
                 pl.resolve(self.path, qid, "true" if i % 2 else "false", OBS,
                            resolved_at="2099-01-02T00:00:00Z")
-        row = pl.score_lessons(pl.load(self.path), min_n=4)["lessons"][0]
+        row = fs.score_lessons(pl.load(self.path), min_n=4)["lessons"][0]
         self.assertEqual(row["verdict"], "hurts")
         self.assertIn("retiring", row["proposal"])
         self.assertEqual(row["status"], "adopted", "scoring never retires on its own")

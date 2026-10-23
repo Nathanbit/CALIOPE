@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import caliope_loop as cl
+import caliope_doctor as cl
 
 
 def _h(data: bytes) -> str:

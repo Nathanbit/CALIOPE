@@ -7,9 +7,12 @@
 | Ruta | Qué es |
 |---|---|
 | `prediction_ledger.py` | Registro de predicciones encadenado: `ask`, `forecast`, `resolve`, `resolve-auto`, `verify`, `score`, `learn`, `lesson-propose`, `lesson-decide`, `lesson-score` |
+| `forecast_scoring.py` | Puntuación de solo lectura: Brier/log, Murphy, `learn`, `score_lessons` |
 | `resolver.py` | Reglas de resolución y velas: evalúa sin ver pronósticos; `tools/fetch_klines.py` descarga datos públicos |
 | `recursive_evidence.py` | Ledger encadenado por SHA-256 de operaciones y cartera |
 | `caliope_loop.py` | Runner fail-closed: `init`, `ingest`, `decision`, `replay`, `status`, `doctor`, `scan-secrets` |
+| `caliope_doctor.py` | `doctor` y escáner de secretos (los invoca `caliope_loop.py`) |
+| `evidence_io.py` | Primitivas comunes: JSON canónico, lectura estricta, escritura atómica, bloqueo, fechas y manifiestos `sha256sum` |
 | `contracts/`, `workflows/` | Esquemas JSON y contratos de revisión por proyecto |
 | `tools/verify.py` | Comprobaciones según lo que cambió |
 | `projects/macroflow/` | Primer caso de uso: Pine y evidencia congelados en `MANIFEST.sha256`, predicciones en `predictions/` |

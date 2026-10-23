@@ -8,21 +8,19 @@ explicit human decision.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import os
 import re
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import evidence_io as eio
 
 SCHEMA_VERSION = "1.0"
 EVENT_TYPES = ("observation", "hypothesis", "candidate", "validation", "promotion")
 PARTITIONS = {"oos", "holdout"}
-HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
+HEX64 = eio.HEX64
 SAFE_ID = re.compile(r"^[A-Za-z0-9_.-]{3,100}$")
 
 
@@ -31,35 +29,19 @@ class EvidenceGateError(ValueError):
 
 
 def _canonical(value: Any) -> bytes:
-    try:
-        text = json.dumps(
-            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-            allow_nan=False,
-        )
-    except (TypeError, ValueError) as exc:
-        raise EvidenceGateError(f"non-canonical evidence: {exc}") from None
-    return text.encode("utf-8")
+    return eio.canonical_bytes(value, EvidenceGateError, "non-canonical evidence")
 
 
 def _digest(value: Any) -> str:
-    return hashlib.sha256(_canonical(value)).hexdigest().upper()
+    return eio.sha256_hex(_canonical(value), upper=True)
 
 
 def _read_json(path: Path) -> dict:
-    def reject_constant(value: str) -> None:
-        raise EvidenceGateError(f"non-finite JSON number is forbidden: {value}")
-
-    value = json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_constant)
-    if not isinstance(value, dict):
-        raise EvidenceGateError(f"{path}: JSON root must be an object")
-    return value
+    return eio.read_json_object(path, EvidenceGateError)
 
 
 def _atomic_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_bytes(_canonical(value) + b"\n")
-    temporary.replace(path)
+    eio.atomic_write_json(path, value, EvidenceGateError, "non-canonical evidence")
 
 
 def _text(value: Any, name: str, minimum: int = 1, maximum: int = 2_000) -> str:
@@ -565,19 +547,9 @@ VALIDATORS = {
 }
 
 
-@contextmanager
 def _ledger_lock(root: Path):
-    lock = root / ".caliope-evidence.lock"
-    try:
-        descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        raise EvidenceGateError("evidence ledger is locked") from None
-    try:
-        os.write(descriptor, str(os.getpid()).encode("ascii"))
-        yield
-    finally:
-        os.close(descriptor)
-        lock.unlink(missing_ok=True)
+    return eio.exclusive_lock(root / ".caliope-evidence.lock", EvidenceGateError,
+                              "evidence ledger is locked")
 
 
 def init_ledger(root: Path, case_id: str, policy: dict) -> Path:

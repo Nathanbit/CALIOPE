@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.14.0 — 2026-10-23
+
+Refactors de mantenibilidad de la auditoría, sin cambiar comportamiento ni
+hashes (la cabecera y la puntuación del ledger real salen idénticas).
+
+- `evidence_io.py`: único dueño de JSON canónico, lectura estricta sin NaN,
+  escritura atómica, bloqueo exclusivo, fechas con zona horaria y el formato
+  `sha256sum`. Lo usan `caliope_loop.py`, `recursive_evidence.py`,
+  `prediction_ledger.py`, `resolver.py`, `caliope_doctor.py` y la guarda.
+- `caliope_doctor.py`: `doctor` y el escáner de secretos salen del runner
+  (`caliope_loop.py` baja de 1.068 a 847 líneas); los comandos `doctor` y
+  `scan-secrets` siguen igual.
+- `forecast_scoring.py`: puntuación, Murphy, `learn` y `score_lessons` salen
+  de `prediction_ledger.py`, que queda como dueño del formato y las reglas.
+- La CLI del ledger usa un manejador por subcomando en lugar de una cadena
+  de `if/elif`.
+- 5 tests nuevos para `evidence_io`; 122 tests OK.
+
 ## 0.13.1 — 2026-10-23
 
 Segunda parte de la auditoría Thermos + anti-slop.

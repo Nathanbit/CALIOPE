@@ -96,7 +96,10 @@ Guía completa: [`docs/PREDICTION_LEDGER.md`](docs/PREDICTION_LEDGER.md).
 | `prediction_ledger.py` | Registro de predicciones, puntuación, `learn` y lecciones |
 | `resolver.py` | Resolución automática con reglas de máquina sobre velas; `tools/fetch_klines.py` descarga datos públicos |
 | `recursive_evidence.py` | Ledger de evidencia por operación y cartera (observación → hipótesis → candidato → validación → promoción humana) |
-| `caliope_loop.py` | Runner de revisión por modelos y `doctor` |
+| `caliope_loop.py` | Runner de revisión por modelos |
+| `caliope_doctor.py` | `doctor` y escáner de secretos |
+| `forecast_scoring.py` | Puntuación, calibración, `learn` y juicio de lecciones (solo lectura) |
+| `evidence_io.py` | Primitivas comunes de todos los ledgers |
 | `contracts/`, `workflows/` | Esquemas JSON y contratos de revisión |
 | `projects/macroflow/` | Primer caso: Pine y evidencia congelados en `MANIFEST.sha256`; predicciones en `predictions/` |
 | `tools/verify.py` | Verificación según lo que cambió |
