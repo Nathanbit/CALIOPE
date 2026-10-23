@@ -21,7 +21,7 @@ python prediction_ledger.py --ledger $L ask `
 python prediction_ledger.py --ledger $L forecast --question q-... --author claude --probability 0.30 --rationale "..."
 
 # 3. Resolución, solo después del plazo y con su fuente
-python prediction_ledger.py --ledger $L resolve --question q-... --outcome false --observed observed.json
+python prediction_ledger.py --ledger $L resolve --question q-... --outcome false --observed @projects/macroflow/predictions/data/observado.json
 
 # 4. Integridad, puntuación y aprendizaje
 python prediction_ledger.py --ledger $L verify
@@ -40,7 +40,7 @@ resolutor evalúa la regla sobre las velas observadas **sin ver los
 pronósticos**, y registra el hash de los datos usados.
 
 ```powershell
-# Al preguntar: la regla en JSON (o la ruta a un archivo .json)
+# Al preguntar: la regla en JSON en línea, o @ruta a un .json dentro de CALIOPE
 python prediction_ledger.py --ledger $L ask --text "BTC toca 84.000 antes que 85.200" `
   --horizon-end 2026-10-22T00:15:00Z --source "BINANCE:BTCUSDT 1m" `
   --criteria "Primer nivel tocado por máximos/mínimos de 1m; ninguno = void" `
@@ -66,6 +66,21 @@ está alineada a las velas. Datos que faltan nunca se leen como "no pasó nada".
 `fetch_klines.py` solo usa la API pública de Binance: sin claves ni cuenta.
 
 ## Compuertas (fallo cerrado, código de salida 2)
+
+Todas las reglas viven en una sola función (`check`) que usan los comandos que
+escriben **y** `verify`, que las reproduce registro a registro. Un registro
+fabricado a mano con un hash correcto también falla si rompe una regla. Las
+escrituras se hacen bajo un bloqueo exclusivo (`ledger.jsonl.lock`) con
+`fsync`, así que dos procesos a la vez no rompen la cadena.
+
+Además de las de la tabla: pronóstico retroactivo solo con `sealed_evidence`
+de formato válido (sha256 de 64 hex y commit de 7-40 hex) y nunca con fecha
+futura; en preguntas con regla, ningún pronóstico después de `rule.start`;
+una pregunta con regla solo se resuelve con `resolve-auto` (a mano, solo
+`void` con motivo); solo cuenta el **primer** pronóstico de cada autor por
+pregunta; NaN e infinito nunca se guardan; los argumentos JSON son en línea o
+`@ruta` dentro de la carpeta CALIOPE.
+
 
 | Compuerta | Qué impide |
 |---|---|

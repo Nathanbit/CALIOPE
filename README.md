@@ -71,7 +71,7 @@ python prediction_ledger.py --ledger $L ask `
 python prediction_ledger.py --ledger $L forecast --question q-... --author nathan --probability 0.30 --rationale "..."
 
 # Tras el plazo: resolver y ver quién acierta
-python prediction_ledger.py --ledger $L resolve --question q-... --outcome false --observed datos.json
+python prediction_ledger.py --ledger $L resolve --question q-... --outcome false --observed @projects/macroflow/predictions/data/observado.json
 python prediction_ledger.py --ledger $L score
 python prediction_ledger.py --ledger $L learn
 python prediction_ledger.py --ledger $L lesson-score

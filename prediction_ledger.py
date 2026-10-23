@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Hash-chained ledger of binary predictions for CALIOPE.
 
-Questions, forecasts and resolutions are appended to a JSONL file. Every
-record stores the SHA-256 of the previous record, so editing, reordering or
-deleting a line breaks the chain and ``verify`` reports where.
+Questions, forecasts, resolutions and lessons are appended to a JSONL file.
+Every record stores the SHA-256 of the previous one, so editing, reordering or
+deleting a line in the middle breaks the chain. ``verify`` also replays every
+gate record by record, with the same function the writers use, so a record
+crafted by hand with a correct hash is still rejected if it breaks a rule.
 
 Design ideas adapted (no code copied) from:
 - hey-research-lab/brier (MIT): sealed-before-answer ledger, refuse forecasts
@@ -14,13 +16,13 @@ Design ideas adapted (no code copied) from:
 - Metaculus question checklist: absolute dates, explicit resolution source
   and criteria.
 - google-research/harness2 (Apache-2.0): a persistent memory of
-  evidence-supported lessons that guides future work and is itself judged
-  ("improving the improver").
+  evidence-supported lessons that guides future work and is itself judged.
 
 Two recursion levels: ``learn`` turns past calibration into proposals, and
 lessons (``lesson-propose``/``lesson-decide``/``lesson-score``) record what a
-person adopted and whether following it improved later forecasts. It never edits the ledger or any forecast: models propose,
-deterministic gates verify, a person decides.
+person adopted and whether following it improved later forecasts. Nothing is
+applied automatically: models propose, deterministic gates verify, a person
+decides.
 
 Standard library only. Exit code 2 means a gate rejected the input.
 """
@@ -30,52 +32,77 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import re
 import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable, Iterator
 
 import resolver
 
+ROOT = Path(__file__).resolve().parent
 GENESIS = "0" * 64
 OUTCOMES = ("true", "false", "void")
 FAILURE = "failure"
 LESSON_DECISIONS = ("adopt", "reject", "retire")
+RECORD_TYPES = ("question", "forecast", "resolution", "lesson", "lesson_decision")
+CLOCK_SKEW_SECONDS = 300
+LOCK_TIMEOUT_SECONDS = 10.0
+HEX64 = re.compile(r"[0-9a-fA-F]{64}")
+COMMIT = re.compile(r"[0-9a-fA-F]{7,40}")
 
 
 class GateError(Exception):
     """A deterministic gate rejected the input (fail closed)."""
 
 
-# ── Primitives ──────────────────────────────────────────────────────────────
+def _reject_constant(name: str) -> None:
+    raise GateError(f"{name} is not valid JSON and is never stored")
+
 
 def canonical(data: dict) -> str:
-    return json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    """Stable serialization used for hashing and storage. NaN/inf are refused."""
+    try:
+        return json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+                          allow_nan=False)
+    except ValueError as exc:
+        raise GateError("NaN or infinity cannot be stored in the ledger") from exc
 
 
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def parse_time(value: str, field: str) -> datetime:
+def parse_time(value: object, field: str) -> datetime:
+    if not isinstance(value, str):
+        raise GateError(f"{field}: not an ISO-8601 timestamp")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (TypeError, ValueError) as exc:
+    except ValueError as exc:
         raise GateError(f"{field}: not an ISO-8601 timestamp") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise GateError(f"{field}: timezone required (naive datetimes are rejected)")
     return parsed.astimezone(timezone.utc)
 
 
+def iso_utc(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def now_utc() -> datetime:
-    """Single clock for every gate (patched in tests)."""
+    """Single clock for every write gate (patched in tests)."""
     return datetime.now(timezone.utc)
 
 
 def utc_now_iso() -> str:
-    return now_utc().isoformat().replace("+00:00", "Z")
+    return iso_utc(now_utc())
 
 
-CLOCK_SKEW_SECONDS = 300
+def _seconds(a: datetime, b: datetime) -> float:
+    return (a - b).total_seconds()
 
 
 def question_id(text: str, horizon_end: str, source: str, criteria: str,
@@ -89,163 +116,356 @@ def question_id(text: str, horizon_end: str, source: str, criteria: str,
     return "q-" + sha256_text(canonical(body))[:16]
 
 
-# ── Ledger storage ──────────────────────────────────────────────────────────
+def lesson_id(text: str, scope: str) -> str:
+    return "l-" + sha256_text(canonical({"text": text.strip(), "scope": scope.strip()}))[:16]
+
+
+def _text(record: dict, field: str) -> str:
+    value = record.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise GateError(f"{field} is required")
+    return value
+
+
+# Storage
 
 def load(path: Path) -> list[dict]:
+    """Read records. Splits only on "\\n", so U+2028 and similar characters
+    inside a text field cannot break a line."""
     if not path.exists():
         return []
+    try:
+        content = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise GateError(f"ledger unreadable as UTF-8: {exc}") from exc
     records = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for number, line in enumerate(content.split("\n"), 1):
         if not line.strip():
             continue
         try:
-            records.append(json.loads(line))
+            record = json.loads(line, parse_constant=_reject_constant)
         except json.JSONDecodeError as exc:
             raise GateError(f"line {number}: invalid JSON") from exc
+        if not isinstance(record, dict) or not {"type", "hash", "prev_hash", "seq"} <= set(record):
+            raise GateError(f"line {number}: not a ledger record")
+        records.append(record)
     return records
 
 
-def verify(records: list[dict]) -> None:
-    previous = GENESIS
+class State:
+    """Ledger state rebuilt by replaying records in order."""
+
+    def __init__(self) -> None:
+        self.questions: dict[str, dict] = {}
+        self.forecasts: dict[str, list[dict]] = {}
+        self.resolutions: dict[str, dict] = {}
+        self.lessons: dict[str, dict] = {}
+
+    def lesson_status(self, lid: str) -> str:
+        return lesson_status(self.lessons[lid])
+
+
+def lesson_status(entry: dict) -> str:
+    if not entry["decisions"]:
+        return "proposed"
+    return {"adopt": "adopted", "reject": "rejected", "retire": "retired"}[
+        entry["decisions"][-1]["decision"]]
+
+
+def check(state: State, record: dict) -> None:
+    """Every gate, applied to one record against the state before it.
+    Writers and ``verify`` use this same function."""
+    kind = record.get("type")
+    if kind not in RECORD_TYPES:
+        raise GateError(f"unknown record type {kind!r}")
+    recorded = parse_time(record.get("recorded_at", record.get("decided_at")), "recorded_at")
+    if kind == "question":
+        _check_question(state, record)
+    elif kind == "forecast":
+        _check_forecast(state, record, recorded)
+    elif kind == "resolution":
+        _check_resolution(state, record, recorded)
+    elif kind == "lesson":
+        _check_lesson(state, record)
+    else:
+        _check_decision(state, record)
+
+
+def _check_question(state: State, record: dict) -> None:
+    text, source, criteria = (_text(record, f) for f in ("text", "source", "criteria"))
+    horizon = record.get("horizon_end")
+    parse_time(horizon, "horizon_end")
+    base_rate = record.get("base_rate")
+    if base_rate is not None and (isinstance(base_rate, bool)
+                                  or not isinstance(base_rate, (int, float))
+                                  or not 0.0 < base_rate < 1.0):
+        raise GateError("base_rate must be strictly between 0 and 1")
+    rule = record.get("rule")
+    if rule is not None:
+        try:
+            if resolver.validate_rule(rule, horizon) != rule:
+                raise GateError("rule is not in normalized form")
+        except resolver.ResolutionError as exc:
+            raise GateError(str(exc)) from exc
+    qid = question_id(text, horizon, source, criteria, rule)
+    if record.get("question_id") != qid:
+        raise GateError("question_id does not match the question fields")
+    if qid in state.questions:
+        raise GateError(f"{qid} already exists")
+
+
+def _check_forecast(state: State, record: dict, recorded: datetime) -> None:
+    qid = record.get("question_id")
+    if qid not in state.questions:
+        raise GateError(f"unknown question {qid}")
+    if qid in state.resolutions:
+        raise GateError("question already resolved: forecasts after the outcome are refused")
+    question = state.questions[qid]
+    author = _text(record, "author")
+    status, probability = record.get("status"), record.get("probability")
+    if status == "ok":
+        if isinstance(probability, bool) or not isinstance(probability, (int, float)) \
+                or not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
+            raise GateError("an ok forecast needs a probability between 0 and 1")
+    elif status != FAILURE or probability is not None:
+        raise GateError("status must be ok, or failure with no probability")
+    made = parse_time(record.get("made_at"), "made_at")
+    if made >= parse_time(question["horizon_end"], "horizon_end"):
+        raise GateError("made_at is not before horizon_end")
+    if _seconds(made, recorded) > CLOCK_SKEW_SECONDS:
+        raise GateError("made_at is in the future")
+    rule = question.get("rule")
+    if rule and made > parse_time(rule["start"], "rule.start"):
+        raise GateError("the rule's observation window has already started")
+    evidence = record.get("sealed_evidence")
+    backdated = _seconds(recorded, made) > CLOCK_SKEW_SECONDS
+    if backdated:
+        if not isinstance(evidence, dict) or not HEX64.fullmatch(str(evidence.get("sha256", ""))) \
+                or not COMMIT.fullmatch(str(evidence.get("commit", ""))):
+            raise GateError("backdated made_at requires sealed_evidence with a 64-hex sha256 "
+                            "and the 7-40 hex commit that published it")
+    applied = record.get("lessons_applied") or []
+    if not isinstance(applied, list):
+        raise GateError("lessons_applied must be a list")
+    for lid in applied:
+        if lid not in state.lessons or state.lesson_status(lid) != "adopted":
+            raise GateError(f"{lid} is not an adopted lesson")
+        if state.lessons[lid]["lesson"]["scope"] not in ("*", author):
+            raise GateError(f"{lid} is scoped to another author")
+        if backdated:
+            raise GateError("backdated forecasts cannot cite lessons")
+
+
+def _check_resolution(state: State, record: dict, recorded: datetime) -> None:
+    qid = record.get("question_id")
+    if qid not in state.questions:
+        raise GateError(f"unknown question {qid}")
+    if qid in state.resolutions:
+        raise GateError("question already resolved")
+    if not state.forecasts.get(qid):
+        raise GateError("refusing to resolve a question without forecasts")
+    outcome = record.get("outcome")
+    if outcome not in OUTCOMES:
+        raise GateError(f"outcome must be one of {OUTCOMES}")
+    if outcome == "void" and not (isinstance(record.get("void_reason"), str)
+                                  and record["void_reason"].strip()):
+        raise GateError("void outcomes need a reason taken from the resolution criteria")
+    question = state.questions[qid]
+    resolved = parse_time(record.get("resolved_at"), "resolved_at")
+    if resolved < parse_time(question["horizon_end"], "horizon_end"):
+        raise GateError("cannot resolve before horizon_end")
+    if _seconds(resolved, recorded) > CLOCK_SKEW_SECONDS:
+        raise GateError("resolved_at is in the future: an outcome cannot be observed yet")
+    observed = record.get("observed")
+    if not isinstance(observed, dict) or not observed.get("source"):
+        raise GateError("observed data must be an object with its source")
+    if question.get("rule") and record.get("method") != "auto" and outcome != "void":
+        raise GateError("a question with a machine rule resolves with resolve-auto "
+                        "(manual resolution may only void it, with a reason)")
+
+
+def _check_lesson(state: State, record: dict) -> None:
+    text, scope = _text(record, "text"), _text(record, "scope")
+    _text(record, "proposed_by")
+    evidence = record.get("evidence_questions")
+    if not isinstance(evidence, list) or not evidence:
+        raise GateError("a lesson needs evidence: cite resolved questions")
+    for qid in evidence:
+        if qid not in state.questions:
+            raise GateError(f"unknown question {qid}")
+        if qid not in state.resolutions:
+            raise GateError(f"{qid} is not resolved: lessons only come from outcomes")
+    lid = lesson_id(text, scope)
+    if record.get("lesson_id") != lid:
+        raise GateError("lesson_id does not match the lesson fields")
+    if lid in state.lessons:
+        raise GateError(f"{lid} already exists")
+
+
+def _check_decision(state: State, record: dict) -> None:
+    lid = record.get("lesson_id")
+    if lid not in state.lessons:
+        raise GateError(f"unknown lesson {lid}")
+    decision = record.get("decision")
+    if decision not in LESSON_DECISIONS:
+        raise GateError(f"decision must be one of {LESSON_DECISIONS}")
+    _text(record, "decided_by")
+    _text(record, "reason")
+    status = state.lesson_status(lid)
+    allowed = {"proposed": ("adopt", "reject"), "adopted": ("retire",)}.get(status, ())
+    if decision not in allowed:
+        raise GateError(f"cannot {decision} a lesson that is {status}")
+
+
+def apply(state: State, record: dict) -> None:
+    kind = record["type"]
+    if kind == "question":
+        state.questions[record["question_id"]] = record
+    elif kind == "forecast":
+        state.forecasts.setdefault(record["question_id"], []).append(record)
+    elif kind == "resolution":
+        state.resolutions[record["question_id"]] = record
+    elif kind == "lesson":
+        state.lessons[record["lesson_id"]] = {"lesson": record, "decisions": []}
+    else:
+        state.lessons[record["lesson_id"]]["decisions"].append(record)
+
+
+def verify(records: list[dict]) -> State:
+    """Check the chain and replay every gate. Returns the resulting state."""
+    previous, state = GENESIS, State()
     for number, record in enumerate(records, 1):
         if record.get("prev_hash") != previous:
             raise GateError(f"line {number}: chain broken (prev_hash mismatch)")
+        if record.get("seq") != number:
+            raise GateError(f"line {number}: seq out of order")
         body = {k: v for k, v in record.items() if k != "hash"}
         if sha256_text(canonical(body)) != record.get("hash"):
             raise GateError(f"line {number}: record content does not match its hash")
+        try:
+            check(state, record)
+        except GateError as exc:
+            raise GateError(f"line {number}: {exc}") from exc
+        apply(state, record)
         previous = record["hash"]
+    return state
 
 
-def append(path: Path, records: list[dict], body: dict) -> dict:
-    body = dict(body)
-    body["prev_hash"] = records[-1]["hash"] if records else GENESIS
-    body["seq"] = len(records) + 1
-    body["hash"] = sha256_text(canonical(body))
+@contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    """Exclusive writer lock next to the ledger."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(canonical(body) + "\n")
-    records.append(body)
-    return body
+    lock = path.with_name(path.name + ".lock")
+    deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if time.monotonic() > deadline:
+                raise GateError(f"ledger locked by another writer ({lock.name}); if no other "
+                                "process is running, delete that file") from None
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        os.close(fd)
+        os.unlink(lock)
+
+
+def commit(path: Path, build: Callable[[State], dict]) -> dict:
+    """Load, verify, build, check and append one record under the lock."""
+    with _locked(path):
+        records = load(path)
+        state = verify(records)
+        body = dict(build(state))
+        body["prev_hash"] = records[-1]["hash"] if records else GENESIS
+        body["seq"] = len(records) + 1
+        body["hash"] = sha256_text(canonical(body))
+        check(state, body)
+        line = canonical(body) + "\n"
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return body
 
 
 def index(records: list[dict]) -> tuple[dict, dict, dict]:
-    questions, forecasts, resolutions = {}, {}, {}
+    state = State()
     for record in records:
-        kind = record["type"]
-        if kind == "question":
-            questions[record["question_id"]] = record
-        elif kind == "forecast":
-            forecasts.setdefault(record["question_id"], []).append(record)
-        elif kind == "resolution":
-            resolutions[record["question_id"]] = record
-    return questions, forecasts, resolutions
+        apply(state, record)
+    return state.questions, state.forecasts, state.resolutions
 
 
-# ── Commands that write ─────────────────────────────────────────────────────
+def lessons_index(records: list[dict]) -> dict:
+    state = State()
+    for record in records:
+        apply(state, record)
+    return state.lessons
+
+
+# Writers
 
 def ask(path: Path, text: str, horizon_end: str, source: str, criteria: str,
         base_rate: float | None = None, project: str | None = None,
         rule: dict | None = None) -> dict:
-    records = load(path)
-    verify(records)
-    parse_time(horizon_end, "horizon_end")
-    for field, value in (("text", text), ("source", source), ("criteria", criteria)):
-        if not value or not value.strip():
-            raise GateError(f"{field} is required: a question must say how it resolves")
-    if base_rate is not None and not 0.0 < base_rate < 1.0:
-        raise GateError("base_rate must be strictly between 0 and 1")
+    horizon = iso_utc(parse_time(horizon_end, "horizon_end"))
     if rule is not None:
         try:
-            rule = resolver.validate_rule(rule, horizon_end)
+            rule = resolver.validate_rule(rule, horizon)
         except resolver.ResolutionError as exc:
             raise GateError(str(exc)) from exc
-    qid = question_id(text, horizon_end, source, criteria, rule)
-    questions, _, _ = index(records)
-    if qid in questions:
-        raise GateError(f"{qid} already exists")
-    return append(path, records, {
-        "type": "question", "question_id": qid, "text": text.strip(),
-        "horizon_end": horizon_end, "source": source.strip(), "criteria": criteria.strip(),
-        "base_rate": base_rate, "project": project, "rule": rule, "recorded_at": utc_now_iso(),
-    })
+    clean = {"text": (text or "").strip(), "source": (source or "").strip(),
+             "criteria": (criteria or "").strip()}
+    for field, value in clean.items():
+        if not value:
+            raise GateError(f"{field} is required: a question must say how it resolves")
+
+    def build(_: State) -> dict:
+        return {"type": "question", "question_id": question_id(
+                    clean["text"], horizon, clean["source"], clean["criteria"], rule),
+                "horizon_end": horizon, "base_rate": base_rate, "project": project,
+                "rule": rule, "recorded_at": utc_now_iso(), **clean}
+    return commit(path, build)
 
 
 def forecast(path: Path, qid: str, author: str, probability: float | None, rationale: str,
              made_at: str | None = None, sealed_evidence: dict | None = None,
              lessons_applied: list[str] | None = None) -> dict:
-    """Seal a forecast. ``made_at`` in the past requires ``sealed_evidence``
-    (hash of an earlier sealed file and the commit that published it).
-    ``lessons_applied`` may only cite lessons a person has adopted."""
-    records = load(path)
-    verify(records)
-    questions, _, resolutions = index(records)
-    if qid not in questions:
-        raise GateError(f"unknown question {qid}")
-    if qid in resolutions:
-        raise GateError("question already resolved: forecasts after the outcome are refused")
-    made = made_at or utc_now_iso()
-    made_dt = parse_time(made, "made_at")
-    if made_dt >= parse_time(questions[qid]["horizon_end"], "horizon_end"):
-        raise GateError("made_at is not before horizon_end")
-    if made_at is not None and not sealed_evidence:
-        raise GateError("backdated made_at requires sealed_evidence (sha256 + commit)")
-    if not author or not author.strip():
-        raise GateError("author is required")
-    applied = sorted(set(lessons_applied or []))
-    lessons = lessons_index(records)
-    for lid in applied:
-        if lid not in lessons or lesson_status(lessons[lid]) != "adopted":
-            raise GateError(f"{lid} is not an adopted lesson")
-        if made_at is not None:
-            raise GateError("backdated forecasts cannot cite lessons")
+    """Seal a forecast. A ``made_at`` in the past needs ``sealed_evidence``
+    (64-hex sha256 of an earlier sealed file and the commit that published it)."""
     status = "ok"
-    if probability is None or not isinstance(probability, (int, float)) \
-            or not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
+    if probability is None or isinstance(probability, bool) \
+            or not isinstance(probability, (int, float)) or not math.isfinite(probability) \
+            or not 0.0 <= probability <= 1.0:
         status, probability = FAILURE, None  # never coerced to 0.5, never dropped
-    return append(path, records, {
-        "type": "forecast", "question_id": qid, "author": author.strip(),
-        "probability": probability, "status": status, "rationale": rationale.strip(),
-        "made_at": made, "sealed_evidence": sealed_evidence, "lessons_applied": applied,
-        "recorded_at": utc_now_iso(),
-    })
+    made = iso_utc(parse_time(made_at, "made_at")) if made_at is not None else None
+
+    def build(_: State) -> dict:
+        now = utc_now_iso()
+        return {"type": "forecast", "question_id": qid, "author": (author or "").strip(),
+                "probability": probability, "status": status,
+                "rationale": (rationale or "").strip(), "made_at": made or now,
+                "sealed_evidence": sealed_evidence,
+                "lessons_applied": sorted(set(lessons_applied or [])), "recorded_at": now}
+    return commit(path, build)
 
 
 def resolve(path: Path, qid: str, outcome: str, observed: dict, resolved_at: str | None = None,
-            void_reason: str | None = None) -> dict:
-    records = load(path)
-    verify(records)
-    questions, forecasts, resolutions = index(records)
-    if qid not in questions:
-        raise GateError(f"unknown question {qid}")
-    if qid in resolutions:
-        raise GateError("question already resolved")
-    if not forecasts.get(qid):
-        raise GateError("refusing to resolve a question without forecasts")
-    if outcome not in OUTCOMES:
-        raise GateError(f"outcome must be one of {OUTCOMES}")
-    if outcome == "void" and not (void_reason and void_reason.strip()):
-        raise GateError("void outcomes need a reason taken from the resolution criteria")
-    when = resolved_at or utc_now_iso()
-    resolved_dt = parse_time(when, "resolved_at")
-    if resolved_dt < parse_time(questions[qid]["horizon_end"], "horizon_end"):
-        raise GateError("cannot resolve before horizon_end")
-    if (resolved_dt - now_utc()).total_seconds() > CLOCK_SKEW_SECONDS:
-        raise GateError("resolved_at is in the future: an outcome cannot be observed yet")
-    if not isinstance(observed, dict) or not observed.get("source"):
-        raise GateError("observed data must be an object with its source")
-    return append(path, records, {
-        "type": "resolution", "question_id": qid, "outcome": outcome,
-        "void_reason": void_reason, "observed": observed, "resolved_at": when,
-        "recorded_at": utc_now_iso(),
-    })
+            void_reason: str | None = None, method: str = "manual") -> dict:
+    def build(_: State) -> dict:
+        now = utc_now_iso()
+        return {"type": "resolution", "question_id": qid, "outcome": outcome,
+                "void_reason": void_reason, "observed": observed, "method": method,
+                "resolved_at": resolved_at or now, "recorded_at": now}
+    return commit(path, build)
 
 
 def resolve_auto(path: Path, qid: str, klines_path: Path) -> dict:
     """Resolve from observed candles with the question's own rule. The
     resolver sees only the rule and the data, never the forecasts."""
-    records = load(path)
-    verify(records)
-    questions, _, _ = index(records)
+    questions, _, _ = index(load(path))
     if qid not in questions:
         raise GateError(f"unknown question {qid}")
     question = questions[qid]
@@ -256,19 +476,47 @@ def resolve_auto(path: Path, qid: str, klines_path: Path) -> dict:
         outcome, evidence = resolver.evaluate(question["rule"], question["horizon_end"], data)
     except (OSError, resolver.ResolutionError) as exc:
         raise GateError(f"automatic resolution refused: {exc}") from exc
+    if _seconds(parse_time(data.get("fetched_at"), "fetched_at"), now_utc()) > CLOCK_SKEW_SECONDS:
+        raise GateError("klines fetched_at is in the future")
     observed = dict(evidence, source=f"klines file ({data.get('source', 'unknown source')})",
                     data_sha256=data_sha, data_fetched_at=data.get("fetched_at"),
                     resolver="resolver.py", resolver_version=resolver.RESOLVER_VERSION)
-    return resolve(path, qid, outcome, observed, void_reason=evidence.get("void_reason"))
+    return resolve(path, qid, outcome, observed, void_reason=evidence.get("void_reason"),
+                   method="auto")
 
 
-# ── Scoring ─────────────────────────────────────────────────────────────────
+def propose_lesson(path: Path, text: str, scope: str, evidence_questions: list[str],
+                   proposed_by: str) -> dict:
+    """A lesson must cite resolved questions; ``scope`` is an author or ``*``."""
+    def build(_: State) -> dict:
+        return {"type": "lesson", "lesson_id": lesson_id(text or "", scope or ""),
+                "text": (text or "").strip(), "scope": (scope or "").strip(),
+                "evidence_questions": sorted(set(evidence_questions or [])),
+                "proposed_by": (proposed_by or "").strip(), "evidence_type": "inference",
+                "recorded_at": utc_now_iso()}
+    return commit(path, build)
+
+
+def decide_lesson(path: Path, lid: str, decision: str, decided_by: str, reason: str) -> dict:
+    """Human gate: proposed -> adopt|reject; adopted -> retire."""
+    def build(_: State) -> dict:
+        return {"type": "lesson_decision", "lesson_id": lid, "decision": decision,
+                "decided_by": (decided_by or "").strip(), "reason": (reason or "").strip(),
+                "human_decision": True, "decided_at": utc_now_iso()}
+    return commit(path, build)
+
+
+# Scoring (read-only)
 
 def scored_pairs(records: list[dict]) -> tuple[list[dict], dict]:
-    """(author, probability, outcome) for resolved non-void questions, plus counts."""
+    """One forecast per author and question: the first one sealed. Later
+    forecasts by the same author are counted but never scored, so repeating
+    a forecast cannot improve a score."""
     questions, forecasts, resolutions = index(records)
-    pairs, counts = [], {"questions": len(questions), "open": 0, "void": 0,
-                         "resolved": 0, "failures": 0}
+    pairs = []
+    counts = {"questions": len(questions), "open": 0, "void": 0, "resolved": 0,
+              "failures": 0, "repeat_forecasts_ignored": 0}
+    failures_by_author: dict[str, int] = {}
     for qid in questions:
         resolution = resolutions.get(qid)
         if resolution is None:
@@ -279,13 +527,20 @@ def scored_pairs(records: list[dict]) -> tuple[list[dict], dict]:
             continue
         counts["resolved"] += 1
         y = 1.0 if resolution["outcome"] == "true" else 0.0
-        for item in forecasts.get(qid, []):
+        seen: set[str] = set()
+        for item in sorted(forecasts.get(qid, []), key=lambda r: r["seq"]):
+            if item["author"] in seen:
+                counts["repeat_forecasts_ignored"] += 1
+                continue
+            seen.add(item["author"])
             if item["status"] == FAILURE:
                 counts["failures"] += 1
+                failures_by_author[item["author"]] = failures_by_author.get(item["author"], 0) + 1
                 continue
             pairs.append({"author": item["author"], "p": float(item["probability"]), "y": y,
                           "base_rate": questions[qid].get("base_rate"), "question_id": qid,
                           "seq": item["seq"], "lessons": item.get("lessons_applied") or []})
+    counts["failures_by_author"] = failures_by_author
     return pairs, counts
 
 
@@ -303,6 +558,21 @@ def log_score(pairs: list[dict], eps: float = 1e-6) -> float | None:
     return total / len(pairs)
 
 
+def _bin(p: float, bins: int) -> int:
+    return min(int(p * bins), bins - 1)
+
+
+def _bin_label(key: int, bins: int) -> str:
+    return f"{key / bins:.1f}-{(key + 1) / bins:.1f}"
+
+
+def _grouped(pairs: list[dict], bins: int) -> dict[int, list[dict]]:
+    groups: dict[int, list[dict]] = {}
+    for x in pairs:
+        groups.setdefault(_bin(x["p"], bins), []).append(x)
+    return groups
+
+
 def murphy(pairs: list[dict], bins: int = 10) -> dict | None:
     """Brier = REL - RES + UNC (+ within-bin terms when forecasts share a bin
     but differ). Reports the residual so the identity is checkable."""
@@ -310,47 +580,44 @@ def murphy(pairs: list[dict], bins: int = 10) -> dict | None:
         return None
     n = len(pairs)
     base = sum(x["y"] for x in pairs) / n
-    groups: dict[int, list[dict]] = {}
-    for x in pairs:
-        groups.setdefault(min(int(x["p"] * bins), bins - 1), []).append(x)
-    rel = res = 0.0
+    rel = res = ece = 0.0
     table = []
-    for key in sorted(groups):
-        group = groups[key]
+    for key, group in sorted(_grouped(pairs, bins).items()):
         mean_p = sum(x["p"] for x in group) / len(group)
         freq = sum(x["y"] for x in group) / len(group)
         rel += len(group) * (mean_p - freq) ** 2
         res += len(group) * (freq - base) ** 2
-        table.append({"bin": f"{key / bins:.1f}-{(key + 1) / bins:.1f}", "n": len(group),
+        ece += len(group) * abs(mean_p - freq)
+        table.append({"bin": _bin_label(key, bins), "n": len(group),
                       "mean_forecast": round(mean_p, 4), "observed_freq": round(freq, 4)})
     rel, res, unc = rel / n, res / n, base * (1 - base)
-    score = brier(pairs)
-    return {"brier": score, "reliability": rel, "resolution": res, "uncertainty": unc,
-            "within_bin_residual": score - (rel - res + unc), "bins": table,
-            "ece": sum(row["n"] * abs(row["mean_forecast"] - row["observed_freq"])
-                       for row in table) / n}
+    score_value = brier(pairs)
+    return {"brier": score_value, "reliability": rel, "resolution": res, "uncertainty": unc,
+            "within_bin_residual": score_value - (rel - res + unc), "bins": table, "ece": ece / n}
 
 
 def score(records: list[dict]) -> dict:
     pairs, counts = scored_pairs(records)
-    authors = sorted({x["author"] for x in pairs})
     board = []
-    for author in authors:
+    for author in sorted({x["author"] for x in pairs} | set(counts["failures_by_author"])):
         own = [x for x in pairs if x["author"] == author]
+        failures = counts["failures_by_author"].get(author, 0)
         board.append({"author": author, "n": len(own), "brier": brier(own),
-                      "log_score": log_score(own)})
-    coin = [dict(x, p=0.5) for x in pairs]
-    based = [dict(x, p=x["base_rate"]) for x in pairs if x["base_rate"] is not None]
+                      "log_score": log_score(own), "failures": failures,
+                      "failure_rate": failures / (len(own) + failures)})
+    with_base = [x for x in pairs if x["base_rate"] is not None]
     report = {"counts": counts, "scoreboard": board,
-              "baselines": {"coin": brier(coin), "base_rate": brier(based) if based else None},
+              "baselines": {
+                  "coin": {"n": len(pairs), "brier": brier([dict(x, p=0.5) for x in pairs])},
+                  "base_rate": {"n": len(with_base),
+                                "brier": brier([dict(x, p=x["base_rate"]) for x in with_base]),
+                                "authors_on_same_questions": brier(with_base)}},
               "calibration": murphy(pairs)}
     if len(pairs) < 30:
         report["warning"] = (f"only {len(pairs)} scored forecasts: calibration and skill are "
                              "not statistically meaningful yet")
     return report
 
-
-# ── Recursive learning (proposal only) ──────────────────────────────────────
 
 def learn(records: list[dict], min_n: int = 30, prior_strength: float = 20.0,
           bins: int = 5) -> dict:
@@ -363,11 +630,7 @@ def learn(records: list[dict], min_n: int = 30, prior_strength: float = 20.0,
     lessons = []
     for author in sorted({x["author"] for x in pairs}):
         own = [x for x in pairs if x["author"] == author]
-        groups: dict[int, list[dict]] = {}
-        for x in own:
-            groups.setdefault(min(int(x["p"] * bins), bins - 1), []).append(x)
-        for key in sorted(groups):
-            group = groups[key]
+        for key, group in sorted(_grouped(own, bins).items()):
             n = len(group)
             stated = sum(x["p"] for x in group) / n
             hits = sum(x["y"] for x in group)
@@ -375,7 +638,7 @@ def learn(records: list[dict], min_n: int = 30, prior_strength: float = 20.0,
             ready = n >= min_n
             lessons.append({
                 "evidence_questions": sorted({x["question_id"] for x in group}),
-                "author": author, "bin": f"{key / bins:.1f}-{(key + 1) / bins:.1f}", "n": n,
+                "author": author, "bin": _bin_label(key, bins), "n": n,
                 "stated_mean": round(stated, 4), "observed_freq": round(hits / n, 4),
                 "shrunk_freq": round(shrunk, 4), "ready": ready,
                 "proposal": (f"When {author} states ~{stated:.0%}, treat it as ~{shrunk:.0%}"
@@ -386,95 +649,14 @@ def learn(records: list[dict], min_n: int = 30, prior_strength: float = 20.0,
             "counts": counts, "lessons": lessons}
 
 
-# ── Lessons: the improvement memory (second recursion level) ────────────────
-#
-# Idea adapted from google-research/harness2 (Apache-2.0): an "improvement
-# harness" of evidence-supported lessons that guides future work, and is
-# itself judged by results. Unlike harness2, nothing is adopted without a
-# recorded human decision, and a lesson is only scored on forecasts made
-# after its adoption (never on the evidence that produced it).
-
-def lesson_id(text: str, scope: str) -> str:
-    return "l-" + sha256_text(canonical({"text": text.strip(), "scope": scope.strip()}))[:16]
-
-
-def lessons_index(records: list[dict]) -> dict:
-    lessons: dict[str, dict] = {}
-    for record in records:
-        if record["type"] == "lesson":
-            lessons[record["lesson_id"]] = {"lesson": record, "decisions": []}
-        elif record["type"] == "lesson_decision":
-            lessons[record["lesson_id"]]["decisions"].append(record)
-    return lessons
-
-
-def lesson_status(entry: dict) -> str:
-    if not entry["decisions"]:
-        return "proposed"
-    return {"adopt": "adopted", "reject": "rejected", "retire": "retired"}[
-        entry["decisions"][-1]["decision"]]
-
-
-def propose_lesson(path: Path, text: str, scope: str, evidence_questions: list[str],
-                   proposed_by: str) -> dict:
-    """A lesson must cite resolved questions; ``scope`` is an author or ``*``."""
-    records = load(path)
-    verify(records)
-    if not text or not text.strip():
-        raise GateError("lesson text is required")
-    if not scope or not scope.strip():
-        raise GateError("scope is required (an author name or '*')")
-    if not proposed_by or not proposed_by.strip():
-        raise GateError("proposed_by is required")
-    evidence = sorted(set(evidence_questions or []))
-    if not evidence:
-        raise GateError("a lesson needs evidence: cite resolved questions")
-    questions, _, resolutions = index(records)
-    for qid in evidence:
-        if qid not in questions:
-            raise GateError(f"unknown question {qid}")
-        if qid not in resolutions:
-            raise GateError(f"{qid} is not resolved: lessons only come from outcomes")
-    lid = lesson_id(text, scope)
-    if lid in lessons_index(records):
-        raise GateError(f"{lid} already exists")
-    return append(path, records, {
-        "type": "lesson", "lesson_id": lid, "text": text.strip(), "scope": scope.strip(),
-        "evidence_questions": evidence, "proposed_by": proposed_by.strip(),
-        "evidence_type": "inference", "recorded_at": utc_now_iso(),
-    })
-
-
-def decide_lesson(path: Path, lid: str, decision: str, decided_by: str, reason: str) -> dict:
-    """Human gate: proposed -> adopt|reject; adopted -> retire."""
-    records = load(path)
-    verify(records)
-    lessons = lessons_index(records)
-    if lid not in lessons:
-        raise GateError(f"unknown lesson {lid}")
-    if decision not in LESSON_DECISIONS:
-        raise GateError(f"decision must be one of {LESSON_DECISIONS}")
-    if not decided_by or not decided_by.strip():
-        raise GateError("decided_by is required: a person decides")
-    if not reason or not reason.strip():
-        raise GateError("a decision needs a reason")
-    status = lesson_status(lessons[lid])
-    allowed = {"proposed": ("adopt", "reject"), "adopted": ("retire",)}.get(status, ())
-    if decision not in allowed:
-        raise GateError(f"cannot {decision} a lesson that is {status}")
-    return append(path, records, {
-        "type": "lesson_decision", "lesson_id": lid, "decision": decision,
-        "decided_by": decided_by.strip(), "reason": reason.strip(), "human_decision": True,
-        "decided_at": utc_now_iso(),
-    })
-
-
 def score_lessons(records: list[dict], min_n: int = 30, margin: float = 0.01) -> dict:
     """Second recursion level: does following a lesson improve later forecasts?
 
-    ``before``: scored forecasts in the lesson's scope sealed before adoption.
-    ``after``: scored forecasts that cite the lesson (necessarily sealed after
-    adoption). Verdicts need ``min_n`` on both sides; the output only proposes."""
+    ``before``: scored forecasts in the lesson's scope sealed before adoption,
+    excluding the questions cited as the lesson's own evidence (they were
+    chosen because they went badly, which would flatter the lesson).
+    ``after``: scored forecasts that cite the lesson. Verdicts need ``min_n``
+    on both sides; the output only proposes."""
     pairs, _ = scored_pairs(records)
     report = []
     for lid, entry in lessons_index(records).items():
@@ -485,8 +667,10 @@ def score_lessons(records: list[dict], min_n: int = 30, margin: float = 0.01) ->
         if adoption is None:
             report.append(dict(row, verdict="not_adopted"))
             continue
+        evidence = set(lesson["evidence_questions"])
         in_scope = [x for x in pairs if lesson["scope"] in ("*", x["author"])]
-        before = [x for x in in_scope if x["seq"] < adoption["seq"]]
+        before = [x for x in in_scope
+                  if x["seq"] < adoption["seq"] and x["question_id"] not in evidence]
         after = [x for x in in_scope if lid in x["lessons"]]
         b_before, b_after = brier(before), brier(after)
         delta = None if b_before is None or b_after is None else b_after - b_before
@@ -507,104 +691,116 @@ def score_lessons(records: list[dict], min_n: int = 30, margin: float = 0.01) ->
             "lessons": report}
 
 
-# ── CLI ─────────────────────────────────────────────────────────────────────
+# CLI
 
-def _json_arg(value: str | None) -> dict | None:
+def json_arg(value: str | None) -> dict | None:
+    """Inline JSON, or ``@path`` to a JSON file inside the CALIOPE folder."""
     if value is None:
         return None
-    candidate = Path(value)
-    text = candidate.read_text(encoding="utf-8") if candidate.exists() else value
+    if value.startswith("@"):
+        target = (ROOT / value[1:]).resolve()
+        if ROOT not in target.parents:
+            raise GateError("@path must point to a file inside the CALIOPE folder")
+        try:
+            value = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise GateError(f"cannot read {value}: {exc}") from exc
     try:
-        data = json.loads(text)
+        data = json.loads(value, parse_constant=_reject_constant)
     except json.JSONDecodeError as exc:
-        raise GateError("expected a JSON object or a path to one") from exc
+        raise GateError("expected a JSON object, or @path to one") from exc
     if not isinstance(data, dict):
         raise GateError("expected a JSON object")
     return data
 
 
-def main(argv: list[str] | None = None) -> int:
+def _ids(value: str) -> list[str]:
+    return [x.strip() for x in value.split(",") if x.strip()]
+
+
+def _read_only(command: Callable[[list[dict]], dict]) -> Callable[[argparse.Namespace], dict]:
+    def run(args: argparse.Namespace) -> dict:
+        records = load(args.ledger)
+        verify(records)
+        return command(records)
+    return run
+
+
+def _verify_command(args: argparse.Namespace) -> dict:
+    records = load(args.ledger)
+    verify(records)
+    return {"ok": True, "records": len(records),
+            "head": records[-1]["hash"] if records else GENESIS}
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ledger", required=True, type=Path)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("verify")
+    sub.add_parser("verify").set_defaults(run=_verify_command)
     p = sub.add_parser("ask")
-    p.add_argument("--text", required=True)
-    p.add_argument("--horizon-end", required=True)
-    p.add_argument("--source", required=True)
-    p.add_argument("--criteria", required=True)
+    for flag in ("--text", "--horizon-end", "--source", "--criteria"):
+        p.add_argument(flag, required=True)
     p.add_argument("--base-rate", type=float)
     p.add_argument("--project")
-    p.add_argument("--rule", help="machine rule as JSON or a path to it (see resolver.py)")
+    p.add_argument("--rule", help="machine rule as inline JSON or @path (see resolver.py)")
+    p.set_defaults(run=lambda a: ask(a.ledger, a.text, a.horizon_end, a.source, a.criteria,
+                                     a.base_rate, a.project, json_arg(a.rule)))
     p = sub.add_parser("forecast")
     p.add_argument("--question", required=True)
     p.add_argument("--author", required=True)
     p.add_argument("--probability", type=float)
     p.add_argument("--rationale", default="")
     p.add_argument("--made-at")
-    p.add_argument("--sealed-evidence")
+    p.add_argument("--sealed-evidence", help="inline JSON or @path")
     p.add_argument("--lessons", default="", help="comma-separated adopted lesson ids")
+    p.set_defaults(run=lambda a: forecast(a.ledger, a.question, a.author, a.probability,
+                                          a.rationale, a.made_at, json_arg(a.sealed_evidence),
+                                          _ids(a.lessons)))
     p = sub.add_parser("resolve")
     p.add_argument("--question", required=True)
     p.add_argument("--outcome", required=True, choices=OUTCOMES)
-    p.add_argument("--observed", required=True)
+    p.add_argument("--observed", required=True, help="inline JSON or @path")
     p.add_argument("--resolved-at")
     p.add_argument("--void-reason")
+    p.set_defaults(run=lambda a: resolve(a.ledger, a.question, a.outcome, json_arg(a.observed),
+                                         a.resolved_at, a.void_reason))
     p = sub.add_parser("resolve-auto")
     p.add_argument("--question", required=True)
     p.add_argument("--klines", required=True, type=Path)
-    sub.add_parser("score")
+    p.set_defaults(run=lambda a: resolve_auto(a.ledger, a.question, a.klines))
+    sub.add_parser("score").set_defaults(run=_read_only(score))
     p = sub.add_parser("learn")
     p.add_argument("--min-n", type=int, default=30)
     p.add_argument("--prior-strength", type=float, default=20.0)
+    p.set_defaults(run=lambda a: _read_only(
+        lambda r: learn(r, a.min_n, a.prior_strength))(a))
     p = sub.add_parser("lesson-propose")
     p.add_argument("--text", required=True)
     p.add_argument("--scope", required=True)
     p.add_argument("--evidence", required=True, help="comma-separated resolved question ids")
     p.add_argument("--proposed-by", required=True)
+    p.set_defaults(run=lambda a: propose_lesson(a.ledger, a.text, a.scope, _ids(a.evidence),
+                                                a.proposed_by))
     p = sub.add_parser("lesson-decide")
     p.add_argument("--lesson", required=True)
     p.add_argument("--decision", required=True, choices=LESSON_DECISIONS)
     p.add_argument("--decided-by", required=True)
     p.add_argument("--reason", required=True)
+    p.set_defaults(run=lambda a: decide_lesson(a.ledger, a.lesson, a.decision, a.decided_by,
+                                               a.reason))
     p = sub.add_parser("lesson-score")
     p.add_argument("--min-n", type=int, default=30)
     p.add_argument("--margin", type=float, default=0.01)
-    args = parser.parse_args(argv)
+    p.set_defaults(run=lambda a: _read_only(
+        lambda r: score_lessons(r, a.min_n, a.margin))(a))
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
-        if args.command == "verify":
-            records = load(args.ledger)
-            verify(records)
-            out = {"ok": True, "records": len(records),
-                   "head": records[-1]["hash"] if records else GENESIS}
-        elif args.command == "ask":
-            out = ask(args.ledger, args.text, args.horizon_end, args.source, args.criteria,
-                      args.base_rate, args.project, _json_arg(args.rule))
-        elif args.command == "forecast":
-            out = forecast(args.ledger, args.question, args.author, args.probability,
-                           args.rationale, args.made_at, _json_arg(args.sealed_evidence),
-                           [x.strip() for x in args.lessons.split(",") if x.strip()])
-        elif args.command == "resolve":
-            out = resolve(args.ledger, args.question, args.outcome, _json_arg(args.observed),
-                          args.resolved_at, args.void_reason)
-        elif args.command == "resolve-auto":
-            out = resolve_auto(args.ledger, args.question, args.klines)
-        elif args.command == "lesson-propose":
-            out = propose_lesson(args.ledger, args.text, args.scope,
-                                 [x.strip() for x in args.evidence.split(",") if x.strip()],
-                                 args.proposed_by)
-        elif args.command == "lesson-decide":
-            out = decide_lesson(args.ledger, args.lesson, args.decision, args.decided_by,
-                                args.reason)
-        else:
-            records = load(args.ledger)
-            verify(records)
-            if args.command == "score":
-                out = score(records)
-            elif args.command == "learn":
-                out = learn(records, args.min_n, args.prior_strength)
-            else:
-                out = score_lessons(records, args.min_n, args.margin)
+        out = args.run(args)
     except GateError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 2

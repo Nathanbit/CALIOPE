@@ -19,12 +19,17 @@ END = "2026-10-21T18:22:00Z"  # five 1m candles
 T0 = resolver.to_ms(START, "t")
 
 
-def klines(*hl, symbol="BTCUSDT", interval="1m", closes=None):
+FETCHED = "2026-10-21T18:30:00Z"
+
+
+def klines(*hl, symbol="BTCUSDT", interval="1m", closes=None, fetched_at=FETCHED):
     rows = []
     for i, (high, low) in enumerate(hl):
         close = closes[i] if closes else (high + low) / 2
-        rows.append([T0 + i * 60_000, str(low), str(high), str(low), str(close), "1"])
-    return {"symbol": symbol, "interval": interval, "source": "test", "fetched_at": END,
+        open_ms = T0 + i * 60_000
+        rows.append([open_ms, str(close), str(high), str(low), str(close), "1",
+                     open_ms + 59_999])
+    return {"symbol": symbol, "interval": interval, "source": "test", "fetched_at": fetched_at,
             "klines": rows}
 
 
@@ -68,7 +73,7 @@ class ResolverTest(unittest.TestCase):
             resolver.evaluate(touch_first(), END, klines(*FLAT, interval="5m"))
         bad = klines(*FLAT)
         bad["klines"][1][2] = "nan"
-        with self.assertRaisesRegex(resolver.ResolutionError, "invalid prices"):
+        with self.assertRaisesRegex(resolver.ResolutionError, "inconsistent prices"):
             resolver.evaluate(touch_first(), END, bad)
 
     def test_rule_validation(self):
@@ -126,7 +131,7 @@ class AutoResolutionTest(unittest.TestCase):
             qid = pl.ask(self.ledger, "t", END, "s", "c", rule=touch_first())["question_id"]
             pl.forecast(self.ledger, qid, "claude", 0.55, "r")
         self.data.write_text(json.dumps(klines(*FLAT[:2], (84400, 83990), *FLAT[:2])), encoding="utf-8")
-        with self.assertRaisesRegex(pl.GateError, "before horizon_end"):
+        with self.assertRaisesRegex(pl.GateError, "future|before horizon_end"):
             with mock.patch.object(pl, "now_utc", return_value=clock):
                 pl.resolve_auto(self.ledger, qid, self.data)
         later = datetime(2026, 10, 21, 18, 30, tzinfo=timezone.utc)

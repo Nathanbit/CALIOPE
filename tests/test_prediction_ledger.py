@@ -85,14 +85,17 @@ class LedgerTest(unittest.TestCase):
         qid = self._question()
         rec = pl.forecast(self.path, qid, "model", float("nan"), "r",
                           made_at="2026-10-21T18:17:00Z",
-                          sealed_evidence={"sha256": "a" * 64, "commit": "x"})
+                          sealed_evidence={"sha256": "a" * 64, "commit": "17235a6"})
         self.assertEqual(rec["status"], "failure")
         self.assertIsNone(rec["probability"])
         self._sealed_forecast(qid, 0.6)
         pl.resolve(self.path, qid, "true", OBS, resolved_at="2026-10-22T00:21:00Z")
         report = pl.score(pl.load(self.path))
         self.assertEqual(report["counts"]["failures"], 1)
-        self.assertEqual([r["author"] for r in report["scoreboard"]], ["claude"])
+        board = {r["author"]: r for r in report["scoreboard"]}
+        self.assertEqual(board["claude"]["n"], 1)
+        self.assertEqual((board["model"]["n"], board["model"]["failures"]), (0, 1))
+        self.assertEqual(board["model"]["failure_rate"], 1.0, "abstaining is visible, not hidden")
 
     def test_void_is_excluded_from_scoring(self):
         qid = self._question()
@@ -186,9 +189,10 @@ class LedgerTest(unittest.TestCase):
         pl.verify(pl.load(self.path))
 
     def test_lesson_score_compares_before_and_after_adoption(self):
-        before_q = [self._resolved_question(i, p=0.9, outcome="true" if i % 2 else "false")
-                    for i in range(4)]
-        lid = pl.propose_lesson(self.path, "Cap at 60%", "claude", before_q, "learn")["lesson_id"]
+        for i in range(4):
+            self._resolved_question(i, p=0.9, outcome="true" if i % 2 else "false")
+        evidence = [self._resolved_question(9, p=0.99, outcome="false")]
+        lid = pl.propose_lesson(self.path, "Cap at 60%", "claude", evidence, "learn")["lesson_id"]
         pl.decide_lesson(self.path, lid, "adopt", "nathan", "test")
         horizon = "2099-01-01T00:00:00Z"
         for i in range(4):
@@ -207,9 +211,10 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(pl.score_lessons(pl.load(self.path))["lessons"][0]["verdict"], "insufficient")
 
     def test_lesson_that_hurts_is_proposed_for_retirement(self):
-        before_q = [self._resolved_question(i, p=0.6, outcome="true" if i % 2 else "false")
-                    for i in range(4)]
-        lid = pl.propose_lesson(self.path, "Be bolder", "claude", before_q, "learn")["lesson_id"]
+        for i in range(4):
+            self._resolved_question(i, p=0.6, outcome="true" if i % 2 else "false")
+        evidence = [self._resolved_question(9, p=0.6, outcome="true")]
+        lid = pl.propose_lesson(self.path, "Be bolder", "claude", evidence, "learn")["lesson_id"]
         pl.decide_lesson(self.path, lid, "adopt", "nathan", "test")
         for i in range(4):
             qid = pl.ask(self.path, f"B{i}", "2099-01-01T00:00:00Z", "s", "c")["question_id"]
