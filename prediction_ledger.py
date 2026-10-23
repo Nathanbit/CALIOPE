@@ -699,8 +699,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--resamples", type=int, default=2000)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--min-n", type=int, default=30)
+    p.add_argument("--min-authors", type=int, default=2,
+                   help="authors a question needs before the swarm forecasts it")
     p.set_defaults(run=lambda a: _read_only(
-        lambda r: fs.rival(r, a.resamples, a.seed, a.min_n))(a))
+        lambda r: fs.rival(r, a.resamples, a.seed, a.min_n, a.min_authors))(a))
     p = sub.add_parser("state", help="the author's continuous thought state now")
     p.add_argument("--author", required=True)
     p.add_argument("--question", help="use this question's concept class")

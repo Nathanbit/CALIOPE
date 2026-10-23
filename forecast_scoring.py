@@ -273,7 +273,44 @@ def thought_state(state: "pl.State", author: str, concept_class: str | None,
 RIVAL_PRIOR = 2.0
 
 
-def _rival_probabilities(records: list[dict]) -> dict[tuple[str, str], float]:
+SWARM = "~enjambre"  # not a valid ledger author, so it can never collide with one
+SWARM_CLIP = 0.01
+
+
+def _logit(p: float) -> float:
+    p = min(max(p, SWARM_CLIP), 1 - SWARM_CLIP)
+    return math.log(p / (1 - p))
+
+
+def swarm_pairs(pairs: list[dict], min_authors: int = 2) -> list[dict]:
+    """The swarm as one more forecaster, so its claim can be scored.
+
+    Idea taken from MiroFish ("swarm intelligence predicts anything"), which
+    never scores its predictions. Here the swarm of a question is the mean in
+    log-odds of every author's first valid forecast (clipped to
+    [0.01, 0.99]), only where at least ``min_authors`` distinct authors
+    forecast. It is derived, never written to the ledger, and judged with the
+    same rival as everyone else: if the crowd does not beat history, it is
+    not intelligence, it is noise with a good name."""
+    by_question: dict[str, list[dict]] = {}
+    for x in pairs:
+        by_question.setdefault(x["question_id"], []).append(x)
+    out = []
+    for qid, group in by_question.items():
+        if len({x["author"] for x in group}) < min_authors:
+            continue
+        mean = sum(_logit(x["p"]) for x in group) / len(group)
+        first = group[0]
+        out.append({"author": SWARM, "p": 1 / (1 + math.exp(-mean)), "y": first["y"],
+                    "base_rate": first["base_rate"], "question_id": qid,
+                    "seq": max(x["seq"] for x in group), "lessons": [],
+                    "concept_class": first["concept_class"],
+                    "members": sorted(x["author"] for x in group)})
+    return out
+
+
+def _rival_probabilities(records: list[dict],
+                         pairs: list[dict] | None = None) -> dict[tuple[str, str], float]:
     """The base rival: for each scored forecast, the rate at which questions
     of the same concept class (or, without a class, all questions) had
     resolved true *before that forecast was sealed*, shrunk toward 0.5 with
@@ -282,7 +319,8 @@ def _rival_probabilities(records: list[dict]) -> dict[tuple[str, str], float]:
     questions, _, resolutions = pl.index(records)
     done = sorted((r["seq"], qid, r["outcome"] == "true") for qid, r in resolutions.items()
                   if r["outcome"] != "void")
-    pairs, _ = scored_pairs(records)
+    if pairs is None:
+        pairs, _ = scored_pairs(records)
     out = {}
     for x in pairs:
         label = x["concept_class"]
@@ -293,18 +331,21 @@ def _rival_probabilities(records: list[dict]) -> dict[tuple[str, str], float]:
     return out
 
 
-def rival(records: list[dict], resamples: int = 2000, seed: int = 0, min_n: int = 30) -> dict:
+def rival(records: list[dict], resamples: int = 2000, seed: int = 0, min_n: int = 30,
+          min_authors: int = 2) -> dict:
     """Does each author beat the base rival on the same questions?
 
     Paired Brier difference (rival minus author: positive means the author
     is better), with a percentile bootstrap interval over questions. The
     seed is fixed so the report is reproducible. ``verdict`` stays
     ``insufficient`` below ``min_n`` and ``undistinguished`` while the 95%
-    interval contains zero: a lucky streak is not skill."""
+    interval contains zero: a lucky streak is not skill. The swarm
+    (``~enjambre``) is scored the same way when questions have several authors."""
     if resamples < 100:
         raise pl.GateError("resamples must be at least 100")
     pairs, _ = scored_pairs(records)
-    rival_p = _rival_probabilities(records)
+    pairs = pairs + swarm_pairs(pairs, min_authors)
+    rival_p = _rival_probabilities(records, pairs)
     rng = random.Random(seed)
     board = []
     for author in sorted({x["author"] for x in pairs}):

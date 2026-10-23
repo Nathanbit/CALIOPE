@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.18.0 — 2026-10-23
+
+MiroFish desmontado con el método REA, y el enjambre como algo que se puede medir.
+
+- `docs/MIROFISH_REA.md`: evidencia con `ruta:línea` del commit `7657031a`,
+  separando observación de inferencia. MiroFish no mide sus aciertos y su
+  prompt trata lo simulado como si fuera el futuro. Licencia AGPL-3.0: solo
+  se tomaron ideas.
+- `~enjambre` en `rival`: media en log-odds de los autores de cada pregunta
+  (`--min-authors`, por defecto 2). Se puntúa contra el rival base con
+  bootstrap y nunca se escribe en el ledger.
+- 3 tests nuevos.
+
 ## 0.17.0 — 2026-10-23
 
 Autores con identidad y rival base con bootstrap.

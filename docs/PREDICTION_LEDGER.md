@@ -160,6 +160,12 @@ pregunta; NaN e infinito nunca se guardan; los argumentos JSON son en línea o
   veredicto es `beats_rival` o `worse_than_rival` solo si el intervalo
   excluye el cero y hay al menos 30 casos; si no, `undistinguished` o
   `insufficient`. Una racha de suerte no es habilidad.
+- **Enjambre** (`~enjambre`, idea de MiroFish): en cada pregunta con al menos
+  dos autores (`--min-authors`), la media en log-odds de sus primeros
+  pronósticos válidos, recortados a [0.01, 0.99]. Es una derivación que no
+  se escribe en el ledger, y `rival` la puntúa como a un autor más. Un nombre
+  con `~` no es válido en el ledger, así que nadie puede sellar como el
+  enjambre. Análisis completo en [MIROFISH_REA.md](MIROFISH_REA.md).
 - `void` y `failure` se cuentan aparte; nunca se puntúan como aciertos.
 
 ## Autores
