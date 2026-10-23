@@ -1,22 +1,34 @@
 # CALIOPE
 
-CALIOPE es el cerebro orquestador del entorno. Coordina modelos de IA, registra
-evidencia, compara propuestas y aplica compuertas antes de promover un cambio.
+CALIOPE es un **registro verificable de predicciones y decisiones asistidas por
+IA**. Hace dos cosas:
 
-El ZIP original contiene un motor Python llamado `themis/`. Se conserva sin
-renombrar para no romper sus imports; CALIOPE es la capa de producto y gobierno.
+1. **Registro de evidencia y predicciones.** Cada afirmación se clasifica como
+   observación, derivación, inferencia o desconocido; cada predicción se sella
+   con fecha y SHA-256 *antes* del resultado y se evalúa después con datos
+   observados, sin redondear a favor.
+2. **Gobierno de modelos.** Los modelos proponen, las compuertas deterministas
+   verifican y una persona decide. El acuerdo entre IAs no convierte una
+   inferencia en hecho, y todo falla cerrado.
+
+MacroFlow, la estrategia de trading del autor, es el primer caso de uso: un
+usuario de CALIOPE, no su núcleo.
 
 ## Componentes
 
+- `recursive_evidence.py`: ledger de evidencia encadenado por SHA-256
+  (observación, hipótesis, candidato, validación, promoción humana).
 - `caliope_loop.py`: runner local, acotado y *fail-closed* para preparar e
-  ingerir revisiones. No llama modelos, no aplica parches y no opera.
-- `themis/`: motor multiagente original (DAG, proveedores, privacidad, evidencia).
-- `workflows/`: contratos reproducibles por proyecto.
+  ingerir revisiones de modelos. No llama modelos, no aplica parches y no opera.
 - `contracts/`: formatos JSON aceptados para observaciones, propuestas,
   decisiones y aprobaciones humanas.
-- `projects/`: artefactos que CALIOPE revisa y versiona.
+- `workflows/`: contratos reproducibles por proyecto.
+- `projects/`: casos que CALIOPE registra y evalúa (hoy, `projects/macroflow`,
+  con sus predicciones selladas en `evidence/`).
 - `runs/`: expedientes generados por el runner; se crea al iniciar el primer run.
-- `docs/`: arquitectura, seguridad y límites para IA física.
+- `docs/`: arquitectura, determinismo, evidencia y límites.
+- `archive/`: piezas retiradas del núcleo (ver `archive/README.md`). Se
+  conservan sin borrar, pero no se mantienen ni se verifican con `doctor`.
 
 ## Regla central
 
@@ -96,13 +108,6 @@ python -m unittest discover -s tests -p "test_caliope_loop.py" -v
 Para comprobar si un revisor es realmente determinista, `replay` compara una
 segunda captura con la original (ver `docs/DETERMINISM.md`).
 
-## Disciplina de trading manual
-
-`tools/discipline/pre_trade_gate.py` decide GO / NO_GO / REVIEW_REQUIRED antes
-de una orden manual y `tools/discipline/session_review.py` revisa la sesión
-desde el export de SimpleFX. Claude Code las usa mediante las skills de
-`.claude/skills/`. Ninguna envía órdenes.
-
 ## Ocho revisores externos
 
 Cada run crea un paquete separado para estos revisores. Sus opiniones son
@@ -176,5 +181,5 @@ publicar, manejar secretos ni operar un broker. Los futuros adaptadores deberán
 conservar esa separación, aplicar timeouts y presupuestos y fallar cerrados ante
 un proveedor ausente, una respuesta inválida o una autorización insuficiente.
 
-El motor heredado de `themis/` y los workflows describen capacidades adicionales,
+El motor heredado `archive/themis/` y los workflows describen capacidades adicionales,
 pero no deben confundirse con garantías ya implementadas por el runner local.
