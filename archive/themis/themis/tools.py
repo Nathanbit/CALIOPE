@@ -8,6 +8,8 @@ from pathlib import Path
 
 import httpx
 
+from . import safe_calc
+
 UA = {"User-Agent": os.environ.get("THEMIS_UA", "Themis research bot contact@example.com")}
 
 
@@ -93,12 +95,14 @@ async def edgar_facts(cik: str, concept: str = "Revenues") -> str:
 
 
 async def calc(expression: str) -> str:
-    """Calculadora segura para ratios financieros, intereses, plazos, etc."""
-    if not re.fullmatch(r"[\d\s+\-*/().,%^e]+", expression):
-        return "[expresión no permitida]"
+    """Calculadora acotada para ratios financieros, intereses, plazos, etc.
+
+    Sin `eval`: un evaluador AST con límites de exponente y tamaño evita que una
+    expresión escrita por un modelo (p. ej. `9^9^9`) bloquee el orquestador.
+    """
     try:
-        return str(eval(expression.replace("^", "**").replace(",", ""), {"__builtins__": {}}, {}))  # noqa: S307
-    except Exception as e:
+        return str(safe_calc.evaluate(expression))
+    except safe_calc.CalcError as e:
         return f"[error: {e}]"
 
 
