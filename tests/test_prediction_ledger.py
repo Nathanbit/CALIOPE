@@ -3,7 +3,9 @@ import random
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -11,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 import prediction_ledger as pl  # noqa: E402
 
 H = "2026-10-22T00:15:00Z"
+FAR = datetime(2099, 1, 3, tzinfo=timezone.utc)
 OBS = {"source": "test", "low": 1.0}
 
 
@@ -63,6 +66,8 @@ class LedgerTest(unittest.TestCase):
             pl.resolve(self.path, qid, "void", OBS, resolved_at="2026-10-22T00:21:00Z")
         with self.assertRaisesRegex(pl.GateError, "source"):
             pl.resolve(self.path, qid, "true", {"low": 1}, resolved_at="2026-10-22T00:21:00Z")
+        with self.assertRaisesRegex(pl.GateError, "in the future"):
+            pl.resolve(self.path, qid, "true", OBS, resolved_at="2099-01-01T00:00:00Z")
 
     def test_backdating_needs_evidence_and_naive_times_fail(self):
         qid = self._question()
@@ -146,6 +151,76 @@ class LedgerTest(unittest.TestCase):
             self.assertEqual([c["status"] for c in caliope_loop._check_prediction_ledgers()], ["fail"])
         finally:
             caliope_loop.ROOT = original
+
+    # ── Lessons (second recursion level) ────────────────────────────────────
+    FUT = "2099-01-01T00:00:00Z"
+
+    def _resolved_question(self, i, p=0.8, outcome="true", author="claude"):
+        qid = pl.ask(self.path, f"E{i}", H, "s", "c")["question_id"]
+        self._sealed_forecast(qid, p, author=author)
+        pl.resolve(self.path, qid, outcome, OBS, resolved_at="2026-10-22T00:21:00Z")
+        return qid
+
+    def test_lesson_gates(self):
+        open_q = pl.ask(self.path, "open", self.FUT, "s", "c")["question_id"]
+        with self.assertRaisesRegex(pl.GateError, "needs evidence"):
+            pl.propose_lesson(self.path, "x", "claude", [], "learn")
+        with self.assertRaisesRegex(pl.GateError, "not resolved"):
+            pl.propose_lesson(self.path, "x", "claude", [open_q], "learn")
+        q = self._resolved_question(0)
+        lid = pl.propose_lesson(self.path, "Shade 80% calls", "claude", [q], "learn")["lesson_id"]
+        with self.assertRaisesRegex(pl.GateError, "already exists"):
+            pl.propose_lesson(self.path, "Shade 80% calls", "claude", [q], "learn")
+        with self.assertRaisesRegex(pl.GateError, "not an adopted lesson"):
+            pl.forecast(self.path, open_q, "claude", 0.6, "r", lessons_applied=[lid])
+        with self.assertRaisesRegex(pl.GateError, "decided_by"):
+            pl.decide_lesson(self.path, lid, "adopt", " ", "ok")
+        with self.assertRaisesRegex(pl.GateError, "cannot retire"):
+            pl.decide_lesson(self.path, lid, "retire", "nathan", "early")
+        pl.decide_lesson(self.path, lid, "adopt", "nathan", "looks right")
+        rec = pl.forecast(self.path, open_q, "claude", 0.6, "r", lessons_applied=[lid])
+        self.assertEqual(rec["lessons_applied"], [lid])
+        pl.decide_lesson(self.path, lid, "retire", "nathan", "stopped helping")
+        with self.assertRaisesRegex(pl.GateError, "not an adopted lesson"):
+            pl.forecast(self.path, open_q, "other", 0.6, "r", lessons_applied=[lid])
+        pl.verify(pl.load(self.path))
+
+    def test_lesson_score_compares_before_and_after_adoption(self):
+        before_q = [self._resolved_question(i, p=0.9, outcome="true" if i % 2 else "false")
+                    for i in range(4)]
+        lid = pl.propose_lesson(self.path, "Cap at 60%", "claude", before_q, "learn")["lesson_id"]
+        pl.decide_lesson(self.path, lid, "adopt", "nathan", "test")
+        horizon = "2099-01-01T00:00:00Z"
+        for i in range(4):
+            qid = pl.ask(self.path, f"A{i}", horizon, "s", "c")["question_id"]
+            pl.forecast(self.path, qid, "claude", 0.6, "r", lessons_applied=[lid])
+            with mock.patch.object(pl, "now_utc", return_value=FAR):
+                pl.resolve(self.path, qid, "true" if i % 2 else "false", OBS,
+                           resolved_at="2099-01-02T00:00:00Z")
+        report = pl.score_lessons(pl.load(self.path), min_n=4)
+        row = report["lessons"][0]
+        self.assertEqual((row["n_before"], row["n_after"]), (4, 4))
+        self.assertAlmostEqual(row["brier_before"], (0.01 + 0.81) / 2)
+        self.assertAlmostEqual(row["brier_after"], (0.16 + 0.36) / 2)
+        self.assertEqual(row["verdict"], "helps")
+        self.assertTrue(report["observation_only"])
+        self.assertEqual(pl.score_lessons(pl.load(self.path))["lessons"][0]["verdict"], "insufficient")
+
+    def test_lesson_that_hurts_is_proposed_for_retirement(self):
+        before_q = [self._resolved_question(i, p=0.6, outcome="true" if i % 2 else "false")
+                    for i in range(4)]
+        lid = pl.propose_lesson(self.path, "Be bolder", "claude", before_q, "learn")["lesson_id"]
+        pl.decide_lesson(self.path, lid, "adopt", "nathan", "test")
+        for i in range(4):
+            qid = pl.ask(self.path, f"B{i}", "2099-01-01T00:00:00Z", "s", "c")["question_id"]
+            pl.forecast(self.path, qid, "claude", 0.95, "r", lessons_applied=[lid])
+            with mock.patch.object(pl, "now_utc", return_value=FAR):
+                pl.resolve(self.path, qid, "true" if i % 2 else "false", OBS,
+                           resolved_at="2099-01-02T00:00:00Z")
+        row = pl.score_lessons(pl.load(self.path), min_n=4)["lessons"][0]
+        self.assertEqual(row["verdict"], "hurts")
+        self.assertIn("retiring", row["proposal"])
+        self.assertEqual(row["status"], "adopted", "scoring never retires on its own")
 
     def test_cli_exit_code_two_on_gate(self):
         code = pl.main(["--ledger", str(self.path), "resolve", "--question", "q-missing",

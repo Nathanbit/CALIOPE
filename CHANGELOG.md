@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.0 — 2026-10-22
+
+- Segundo nivel de recursividad en `prediction_ledger.py`, inspirado en el
+  *improvement harness* de google-research/harness2 (Apache-2.0):
+  - `lesson-propose`: lecciones que citan preguntas ya resueltas.
+  - `lesson-decide`: solo una persona adopta, rechaza o retira, con motivo.
+  - `forecast --lessons`: un pronóstico declara qué lecciones adoptadas sigue.
+  - `lesson-score`: compara el Brier antes y después de adoptar cada lección
+    (30 casos por lado); si empeora, propone retirarla sin retirarla.
+- Nueva compuerta: `resolve` rechaza un `resolved_at` en el futuro.
+- `learn` incluye las preguntas que respaldan cada tramo, listas para citar.
+- `.claude/rules/python.md` deja de apuntar a `labs/`.
+- Verificación: `tools/verify.py --all` en verde.
+
 ## 0.10.0 — 2026-10-22
 
 - Integra en la nueva estructura la capa de gobierno para Claude Code del
