@@ -32,6 +32,36 @@ python prediction_ledger.py --ledger $L learn
 `doctor` verifica la cadena de todos los `projects/*/predictions/*.jsonl` y
 falla si un registro fue editado, reordenado o borrado.
 
+## Sellar en un paso con conceptos (idea LCM)
+
+Inspirado en el *Large Concept Model* de Meta FAIR
+([arXiv 2412.08821](https://arxiv.org/abs/2412.08821)), que razona sobre
+conceptos (frases enteras) en vez de palabras. CALIOPE no puede alojar ese
+modelo (solo biblioteca estándar, sin pesos); toma la idea de arquitectura:
+
+- Una predicción se escribe como **concepto** (`concepts.py`): activo,
+  evento, niveles, ventana, precio de referencia observado y su fuente. El
+  texto, el criterio y la regla se **generan** del concepto: dos formas de
+  decir lo mismo dan la misma pregunta, y `verify` rechaza una pregunta cuyo
+  texto no coincide con el generado.
+- Cada concepto tiene una **clase** sin números exactos, por ejemplo
+  `BTCUSDT|touch|at_or_below|d1-2%|h<=24h`. `score` muestra la tasa observada
+  por clase y `learn --by concept` calibra a cada autor por clase, de modo que
+  lo aprendido se transfiere entre preguntas del mismo tipo.
+- Se rechaza lo que no es una predicción: precio de referencia que ya cumple
+  el evento, o fuera de los niveles de `touch_first`.
+
+```powershell
+python prediction_ledger.py --ledger $L seal --concept '{"asset":"BTCUSDT","event":"touch","interval":"15m","start":"2026-10-23T12:15:00Z","horizon_end":"2026-10-24T12:15:00Z","reference_price":81270,"reference_source":"Binance 12:00Z","level":80000,"side":"at_or_below"}' `
+  --author nathan --probability 0.3 --rationale "máximos descendentes" --dry-run
+# si el texto generado es correcto, el mismo comando sin --dry-run
+```
+
+`seal` escribe pregunta y pronóstico **juntos o ninguno**. En Claude Code,
+la skill `caliope-predict` convierte un mensaje como "sella: BTC toca 80.000
+antes del viernes, 30%" en el concepto, enseña el dry run y sella solo con tu
+confirmación.
+
 ## Resolución automática
 
 Una pregunta puede llevar una **regla legible por máquina** (`--rule`). La

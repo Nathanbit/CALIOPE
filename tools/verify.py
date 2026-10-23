@@ -37,6 +37,7 @@ ROOT_TEST_PREFIXES = (
     "evidence_io.py",
     "caliope_doctor.py",
     "resolver.py",
+    "concepts.py",
     "contracts/",
     "workflows/",
     "tests/",
