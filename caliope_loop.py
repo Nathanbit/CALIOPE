@@ -7,17 +7,16 @@ Only deterministic state transitions are automated.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
-import os
 import re
-import subprocess
 import sys
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import caliope_doctor
+import evidence_io as eio
 
 ROOT = Path(__file__).resolve().parent
 RUNS = ROOT / "runs"
@@ -59,7 +58,7 @@ CREDENTIAL = re.compile(
     r"|xox[abpr]-|bearer\s+\S{8,}|://[^/\s:@]+:[^/\s@]+@)",
     re.IGNORECASE,
 )
-HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
+HEX64 = eio.HEX64
 SAFE_TARGET = re.compile(r"^(source|tests|docs)/[A-Za-z0-9_./-]+$")
 STAGES = {
     "observe_parallel", "evidence_merge", "decision", "human_review",
@@ -72,7 +71,7 @@ class GateError(ValueError):
 
 
 def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest().upper()
+    return eio.sha256_hex(data, upper=True)
 
 
 def sha256_file(path: Path) -> str:
@@ -80,30 +79,15 @@ def sha256_file(path: Path) -> str:
 
 
 def canonical_bytes(value: Any) -> bytes:
-    try:
-        text = json.dumps(
-            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-        )
-    except (TypeError, ValueError) as exc:
-        raise GateError(f"value is not canonical JSON: {exc}") from None
-    return text.encode("utf-8")
+    return eio.canonical_bytes(value, GateError, "value is not canonical JSON")
 
 
 def read_json(path: Path) -> dict:
-    def reject_constant(value: str) -> None:
-        raise GateError(f"non-finite JSON number is forbidden: {value}")
-
-    value = json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_constant)
-    if not isinstance(value, dict):
-        raise GateError(f"{path}: JSON root must be an object")
-    return value
+    return eio.read_json_object(path, GateError)
 
 
 def atomic_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_bytes(canonical_bytes(value) + b"\n")
-    temp.replace(path)
+    eio.atomic_write_json(path, value, GateError, "value is not canonical JSON")
 
 
 def _required(kind: str) -> set[str]:
@@ -448,20 +432,10 @@ def run_path(run_id: str) -> Path:
     return RUNS / run_id
 
 
-@contextmanager
 def _run_lock(folder: Path):
     """Fail rather than race two manifest read/modify/write transactions."""
-    lock = folder / ".caliope.lock"
-    try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        raise GateError("run is locked by another CALIOPE transaction") from None
-    try:
-        os.write(fd, str(os.getpid()).encode("ascii"))
-        yield
-    finally:
-        os.close(fd)
-        lock.unlink(missing_ok=True)
+    return eio.exclusive_lock(folder / ".caliope.lock", GateError,
+                              "run is locked by another CALIOPE transaction")
 
 
 def _validate_manifest(manifest: dict, run_id: str) -> None:
@@ -814,213 +788,6 @@ def print_status(run_id: str) -> None:
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
 
 
-# doctor: diagnóstico de solo lectura (patrón "doctor" de REA). No modifica
-# nada salvo comprobar que runs/ es escribible. Cualquier "fail" devuelve 2.
-UNSAFE_FLAG = re.compile(r"^\s*(automatic_publish|automatic_trading|live_execution)\s*:\s*true\b",
-                         re.IGNORECASE | re.MULTILINE)
-
-
-def _eol_variants(data: bytes) -> dict[str, str]:
-    lf = data.replace(b"\r\n", b"\n")
-    return {k: sha256_bytes(v).lower() for k, v in
-            (("raw", data), ("lf", lf), ("crlf", lf.replace(b"\n", b"\r\n")))}
-
-
-def _check_manifest(manifest: Path) -> list[dict]:
-    out = []
-    base = manifest.parent
-    for line_no, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        parts = line.split(None, 1)
-        name = f"manifest:{manifest.relative_to(ROOT).as_posix()}:{line_no}"
-        if len(parts) != 2 or not re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
-            out.append({"check": name, "status": "fail", "detail": "línea con formato inválido"})
-            continue
-        want, rel = parts[0].lower(), parts[1].strip().lstrip("*")
-        target = (base / rel).resolve()
-        if base.resolve() not in target.parents:
-            out.append({"check": name, "status": "fail", "detail": f"ruta fuera del proyecto: {rel}"})
-            continue
-        if not target.is_file():
-            out.append({"check": name, "status": "fail", "detail": f"falta {rel}"})
-            continue
-        hashes = _eol_variants(target.read_bytes())
-        if hashes["raw"] == want:
-            continue
-        if want in (hashes["lf"], hashes["crlf"]):
-            out.append({"check": name, "status": "warn",
-                        "detail": f"{rel}: coincide solo tras normalizar finales de línea (git autocrlf)"})
-        else:
-            out.append({"check": name, "status": "fail",
-                        "detail": f"{rel}: hash distinto del congelado ({want[:12]}… vs {hashes['raw'][:12]}…)"})
-    return out
-
-
-# Seguridad de la cadena de suministro (respuesta a GhostAction, oct-2026).
-# CALIOPE no usa CI: cualquier workflow de GitHub Actions debe estar aprobado
-# por hash. El escáner nunca imprime el valor de un secreto, solo dónde está.
-SECRET_PATTERNS = {
-    "aws_access_key": re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
-    "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
-    "github_fine_grained_pat": re.compile(r"\bgithub_pat_[A-Za-z0-9_]{40,}\b"),
-    "gitlab_token": re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
-    "anthropic_key": re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"),
-    "openai_key": re.compile(r"\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}"),
-    "openrouter_key": re.compile(r"\bsk-or-v1-[A-Za-z0-9]{32,}"),
-    "google_api_key": re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
-    "slack_token": re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
-    "sendgrid_key": re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"),
-    "npm_token": re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
-    "pypi_token": re.compile(r"\bpypi-[A-Za-z0-9_-]{50,}"),
-    "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY"),
-}
-# Marcadores publicados de la campaña GhostAction. Se escriben partidos para que
-# este archivo no se detecte a sí mismo.
-IOC_MARKERS = tuple("".join(parts) for parts in (
-    ("193.32.", "204.199"), ("my-git", "hub.com"), ("AKIA_CTX", "_START"),
-    ("send-", "secrets"), ("Prepare Cache ", "Busting"),
-))
-ALLOWED_WORKFLOWS = Path("security") / "allowed_workflows.sha256"
-MAX_SCAN_BYTES = 2_000_000
-
-
-def _git_files(staged: bool) -> list[tuple[str, bytes | None]]:
-    """(name, content) for tracked or staged files. Content is None when the
-    file is too large to scan: callers must report it, never skip it."""
-    cmd = (["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"] if staged
-           else ["git", "ls-files", "-z"])
-    names = subprocess.run(cmd, cwd=ROOT, capture_output=True, check=True).stdout.split(b"\0")
-    out = []
-    for raw in names:
-        if not raw:
-            continue
-        name = raw.decode("utf-8", "replace")
-        if staged:
-            data = subprocess.run(["git", "show", f":{name}"], cwd=ROOT, capture_output=True,
-                                  check=True).stdout
-        else:
-            path = ROOT / name
-            if not path.is_file():
-                continue  # deleted in the working tree; the staged scan covers commits
-            data = path.read_bytes() if path.stat().st_size <= MAX_SCAN_BYTES else None
-        out.append((name, None if data is None or len(data) > MAX_SCAN_BYTES else data))
-    return out
-
-
-def scan_text(name: str, data: bytes) -> list[dict]:
-    """Devuelve hallazgos sin el valor del secreto (solo archivo, línea y tipo)."""
-    if b"\0" in data[:8192]:
-        return []  # binario
-    findings = []
-    for line_no, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
-        for kind, pattern in SECRET_PATTERNS.items():
-            if pattern.search(line):
-                findings.append({"file": name, "line": line_no, "kind": kind})
-        for marker in IOC_MARKERS:
-            if marker in line and name != "caliope_loop.py":
-                findings.append({"file": name, "line": line_no, "kind": "ghostaction_ioc"})
-    return findings
-
-
-def scan_secrets(staged: bool = False) -> list[dict]:
-    findings: list[dict] = []
-    for name, data in _git_files(staged):
-        if data is None:
-            findings.append({"file": name, "line": 0, "kind": "too_large_to_scan"})
-            continue
-        findings.extend(scan_text(name, data))
-    return findings
-
-
-def _check_workflows() -> list[dict]:
-    wf_dir = ROOT / ".github" / "workflows"
-    files = sorted(p for p in wf_dir.glob("*") if p.is_file()) if wf_dir.is_dir() else []
-    if not files:
-        return [{"check": "ci_workflows", "status": "pass", "detail": "sin workflows de GitHub Actions"}]
-    allowed: dict[str, str] = {}
-    allow_file = ROOT / ALLOWED_WORKFLOWS
-    if allow_file.is_file():
-        for line in allow_file.read_text(encoding="utf-8").splitlines():
-            parts = line.split(None, 1)
-            if len(parts) == 2 and HEX64.match(parts[0]):
-                allowed[parts[1].strip()] = parts[0].lower()
-    out = []
-    for f in files:
-        rel = f.relative_to(ROOT).as_posix()
-        digest = sha256_file(f).lower()
-        if allowed.get(rel) == digest:
-            out.append({"check": f"ci_workflow:{rel}", "status": "pass", "detail": "aprobado por hash"})
-        else:
-            why = "hash distinto del aprobado" if rel in allowed else "no aprobado"
-            out.append({"check": f"ci_workflow:{rel}", "status": "fail",
-                        "detail": f"{why}: revisa quién lo añadió; CALIOPE no usa CI"})
-    return out
-
-
-def _check_prediction_ledgers() -> list[dict]:
-    """A tampered, reordered or truncated prediction ledger fails closed."""
-    out: list[dict] = []
-    ledgers = sorted((ROOT / "projects").glob("*/predictions/*.jsonl"))
-    if not ledgers:
-        return out
-    try:
-        import prediction_ledger
-    except ImportError as exc:
-        return [{"check": "prediction_ledgers", "status": "fail", "detail": f"no importable: {exc}"[:200]}]
-    for ledger in ledgers:
-        rel = ledger.relative_to(ROOT).as_posix()
-        try:
-            records = prediction_ledger.load(ledger)
-            prediction_ledger.verify(records)
-            out.append({"check": f"ledger:{rel}", "status": "pass",
-                        "detail": f"cadena íntegra ({len(records)} registros)"})
-        except prediction_ledger.GateError as exc:
-            out.append({"check": f"ledger:{rel}", "status": "fail", "detail": str(exc)[:200]})
-    return out
-
-
-def doctor() -> dict:
-    checks: list[dict] = []
-    ok_py = sys.version_info >= (3, 11)
-    checks.append({"check": "python", "status": "pass" if ok_py else "fail",
-                   "detail": sys.version.split()[0] + ("" if ok_py else " (<3.11)")})
-    for schema in sorted(CONTRACTS.glob("*.json")):
-        try:
-            read_json(schema)
-            checks.append({"check": f"contract:{schema.name}", "status": "pass", "detail": "JSON válido"})
-        except (OSError, ValueError) as exc:
-            checks.append({"check": f"contract:{schema.name}", "status": "fail", "detail": str(exc)[:200]})
-    for wf in sorted((ROOT / "workflows").glob("*.y*ml")):
-        hits = UNSAFE_FLAG.findall(wf.read_text(encoding="utf-8"))
-        checks.append({"check": f"workflow:{wf.name}", "status": "fail" if hits else "pass",
-                       "detail": f"flags activados: {sorted(set(hits))}" if hits else "sin publicación/trading automático"})
-    manifests = sorted((ROOT / "projects").glob("*/MANIFEST.sha256"))
-    for manifest in manifests:
-        found = _check_manifest(manifest)
-        checks.extend(found or [{"check": f"manifest:{manifest.relative_to(ROOT).as_posix()}",
-                                 "status": "pass", "detail": "todos los hashes coinciden"}])
-    checks.extend(_check_prediction_ledgers())
-    checks.extend(_check_workflows())
-    try:
-        found = scan_secrets()
-        checks.append({"check": "secret_scan", "status": "fail" if found else "pass",
-                       "detail": f"{len(found)} hallazgo(s): " + ", ".join(
-                           f"{f['file']}:{f['line']} ({f['kind']})" for f in found[:10])
-                       if found else "sin secretos ni marcadores de GhostAction en archivos versionados"})
-    except (OSError, subprocess.CalledProcessError) as exc:
-        # Sin git no se puede afirmar que esté limpio: falla cerrado.
-        checks.append({"check": "secret_scan", "status": "fail", "detail": f"no ejecutado: {exc}"[:200]})
-    try:
-        RUNS.mkdir(exist_ok=True)
-        ok_runs = os.access(RUNS, os.W_OK)
-    except OSError:
-        ok_runs = False
-    checks.append({"check": "runs_dir", "status": "pass" if ok_runs else "fail", "detail": str(RUNS.name)})
-    summary = {k: sum(c["status"] == k for c in checks) for k in ("pass", "warn", "fail")}
-    return {"healthy": summary["fail"] == 0, "summary": summary, "checks": checks}
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1047,7 +814,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "scan-secrets":
-            found = scan_secrets(staged=args.staged)
+            found = caliope_doctor.scan_secrets(staged=args.staged)
             for f in found:
                 print(f"SECRETO? {f['file']}:{f['line']} ({f['kind']})", file=sys.stderr)
             if found:
@@ -1055,7 +822,7 @@ def main(argv: list[str] | None = None) -> int:
                       file=sys.stderr)
             return 2 if found else 0
         if args.command == "doctor":
-            report = doctor()
+            report = caliope_doctor.doctor()
             print(json.dumps(report, indent=2, ensure_ascii=False))
             return 0 if report["healthy"] else 2
         if args.command == "init":

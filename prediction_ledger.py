@@ -20,7 +20,8 @@ Design ideas adapted (no code copied) from:
 
 Two recursion levels: ``learn`` turns past calibration into proposals, and
 lessons (``lesson-propose``/``lesson-decide``/``lesson-score``) record what a
-person adopted and whether following it improved later forecasts. Nothing is
+person adopted and whether following it improved later forecasts. Scoring is
+read-only and lives in ``forecast_scoring.py``. Nothing is
 applied automatically: models propose, deterministic gates verify, a person
 decides.
 
@@ -29,18 +30,16 @@ Standard library only. Exit code 2 means a gate rejected the input.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
 import re
 import sys
-import time
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable
 
+import evidence_io as eio
 import resolver
 
 ROOT = Path(__file__).resolve().parent
@@ -59,37 +58,20 @@ class GateError(Exception):
     """A deterministic gate rejected the input (fail closed)."""
 
 
-def _reject_constant(name: str) -> None:
-    raise GateError(f"{name} is not valid JSON and is never stored")
-
-
 def canonical(data: dict) -> str:
     """Stable serialization used for hashing and storage. NaN/inf are refused."""
-    try:
-        return json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
-                          allow_nan=False)
-    except ValueError as exc:
-        raise GateError("NaN or infinity cannot be stored in the ledger") from exc
+    return eio.canonical_text(data, GateError, "NaN or infinity cannot be stored in the ledger")
 
 
 def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return eio.sha256_hex(text.encode("utf-8"), upper=False)
 
 
 def parse_time(value: object, field: str) -> datetime:
-    if not isinstance(value, str):
-        raise GateError(f"{field}: not an ISO-8601 timestamp")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise GateError(f"{field}: not an ISO-8601 timestamp") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise GateError(f"{field}: timezone required (naive datetimes are rejected)")
-    return parsed.astimezone(timezone.utc)
+    return eio.parse_aware_time(value, field, GateError)
 
 
-def iso_utc(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+iso_utc = eio.iso_utc
 
 
 def now_utc() -> datetime:
@@ -143,7 +125,7 @@ def load(path: Path) -> list[dict]:
         if not line.strip():
             continue
         try:
-            record = json.loads(line, parse_constant=_reject_constant)
+            record = eio.loads_strict(line, GateError)
         except json.JSONDecodeError as exc:
             raise GateError(f"line {number}: invalid JSON") from exc
         if not isinstance(record, dict) or not {"type", "hash", "prev_hash", "seq"} <= set(record):
@@ -351,26 +333,12 @@ def verify(records: list[dict]) -> State:
     return state
 
 
-@contextmanager
-def _locked(path: Path) -> Iterator[None]:
+def _locked(path: Path):
     """Exclusive writer lock next to the ledger."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_name(path.name + ".lock")
-    deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
-    while True:
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            break
-        except FileExistsError:
-            if time.monotonic() > deadline:
-                raise GateError(f"ledger locked by another writer ({lock.name}); if no other "
-                                "process is running, delete that file") from None
-            time.sleep(0.05)
-    try:
-        yield
-    finally:
-        os.close(fd)
-        os.unlink(lock)
+    return eio.exclusive_lock(lock, GateError, f"ledger locked by another writer ({lock.name}); "
+                              "if no other process is running, delete that file",
+                              timeout=LOCK_TIMEOUT_SECONDS)
 
 
 def commit(path: Path, build: Callable[[State], dict]) -> dict:
@@ -506,191 +474,6 @@ def decide_lesson(path: Path, lid: str, decision: str, decided_by: str, reason: 
     return commit(path, build)
 
 
-# Scoring (read-only)
-
-def scored_pairs(records: list[dict]) -> tuple[list[dict], dict]:
-    """One forecast per author and question: the first one sealed. Later
-    forecasts by the same author are counted but never scored, so repeating
-    a forecast cannot improve a score."""
-    questions, forecasts, resolutions = index(records)
-    pairs = []
-    counts = {"questions": len(questions), "open": 0, "void": 0, "resolved": 0,
-              "failures": 0, "repeat_forecasts_ignored": 0}
-    failures_by_author: dict[str, int] = {}
-    for qid in questions:
-        resolution = resolutions.get(qid)
-        if resolution is None:
-            counts["open"] += 1
-            continue
-        if resolution["outcome"] == "void":
-            counts["void"] += 1
-            continue
-        counts["resolved"] += 1
-        y = 1.0 if resolution["outcome"] == "true" else 0.0
-        seen: set[str] = set()
-        for item in sorted(forecasts.get(qid, []), key=lambda r: r["seq"]):
-            if item["author"] in seen:
-                counts["repeat_forecasts_ignored"] += 1
-                continue
-            seen.add(item["author"])
-            if item["status"] == FAILURE:
-                counts["failures"] += 1
-                failures_by_author[item["author"]] = failures_by_author.get(item["author"], 0) + 1
-                continue
-            pairs.append({"author": item["author"], "p": float(item["probability"]), "y": y,
-                          "base_rate": questions[qid].get("base_rate"), "question_id": qid,
-                          "seq": item["seq"], "lessons": item.get("lessons_applied") or []})
-    counts["failures_by_author"] = failures_by_author
-    return pairs, counts
-
-
-def brier(pairs: list[dict]) -> float | None:
-    return sum((x["p"] - x["y"]) ** 2 for x in pairs) / len(pairs) if pairs else None
-
-
-def log_score(pairs: list[dict], eps: float = 1e-6) -> float | None:
-    if not pairs:
-        return None
-    total = 0.0
-    for x in pairs:
-        p = min(max(x["p"], eps), 1 - eps)
-        total += math.log(p if x["y"] == 1.0 else 1 - p)
-    return total / len(pairs)
-
-
-def _bin(p: float, bins: int) -> int:
-    return min(int(p * bins), bins - 1)
-
-
-def _bin_label(key: int, bins: int) -> str:
-    return f"{key / bins:.1f}-{(key + 1) / bins:.1f}"
-
-
-def _grouped(pairs: list[dict], bins: int) -> dict[int, list[dict]]:
-    groups: dict[int, list[dict]] = {}
-    for x in pairs:
-        groups.setdefault(_bin(x["p"], bins), []).append(x)
-    return groups
-
-
-def murphy(pairs: list[dict], bins: int = 10) -> dict | None:
-    """Brier = REL - RES + UNC (+ within-bin terms when forecasts share a bin
-    but differ). Reports the residual so the identity is checkable."""
-    if not pairs:
-        return None
-    n = len(pairs)
-    base = sum(x["y"] for x in pairs) / n
-    rel = res = ece = 0.0
-    table = []
-    for key, group in sorted(_grouped(pairs, bins).items()):
-        mean_p = sum(x["p"] for x in group) / len(group)
-        freq = sum(x["y"] for x in group) / len(group)
-        rel += len(group) * (mean_p - freq) ** 2
-        res += len(group) * (freq - base) ** 2
-        ece += len(group) * abs(mean_p - freq)
-        table.append({"bin": _bin_label(key, bins), "n": len(group),
-                      "mean_forecast": round(mean_p, 4), "observed_freq": round(freq, 4)})
-    rel, res, unc = rel / n, res / n, base * (1 - base)
-    score_value = brier(pairs)
-    return {"brier": score_value, "reliability": rel, "resolution": res, "uncertainty": unc,
-            "within_bin_residual": score_value - (rel - res + unc), "bins": table, "ece": ece / n}
-
-
-def score(records: list[dict]) -> dict:
-    pairs, counts = scored_pairs(records)
-    board = []
-    for author in sorted({x["author"] for x in pairs} | set(counts["failures_by_author"])):
-        own = [x for x in pairs if x["author"] == author]
-        failures = counts["failures_by_author"].get(author, 0)
-        board.append({"author": author, "n": len(own), "brier": brier(own),
-                      "log_score": log_score(own), "failures": failures,
-                      "failure_rate": failures / (len(own) + failures)})
-    with_base = [x for x in pairs if x["base_rate"] is not None]
-    report = {"counts": counts, "scoreboard": board,
-              "baselines": {
-                  "coin": {"n": len(pairs), "brier": brier([dict(x, p=0.5) for x in pairs])},
-                  "base_rate": {"n": len(with_base),
-                                "brier": brier([dict(x, p=x["base_rate"]) for x in with_base]),
-                                "authors_on_same_questions": brier(with_base)}},
-              "calibration": murphy(pairs)}
-    if len(pairs) < 30:
-        report["warning"] = (f"only {len(pairs)} scored forecasts: calibration and skill are "
-                             "not statistically meaningful yet")
-    return report
-
-
-def learn(records: list[dict], min_n: int = 30, prior_strength: float = 20.0,
-          bins: int = 5) -> dict:
-    """Per author and probability bin, compare stated confidence with observed
-    frequency. Shrinks the observed frequency toward the stated probability
-    with ``prior_strength`` pseudo-observations, and only proposes an
-    adjustment once a bin has ``min_n`` resolved forecasts. Output is an
-    observation-only proposal; nothing is applied automatically."""
-    pairs, counts = scored_pairs(records)
-    lessons = []
-    for author in sorted({x["author"] for x in pairs}):
-        own = [x for x in pairs if x["author"] == author]
-        for key, group in sorted(_grouped(own, bins).items()):
-            n = len(group)
-            stated = sum(x["p"] for x in group) / n
-            hits = sum(x["y"] for x in group)
-            shrunk = (hits + prior_strength * stated) / (n + prior_strength)
-            ready = n >= min_n
-            lessons.append({
-                "evidence_questions": sorted({x["question_id"] for x in group}),
-                "author": author, "bin": _bin_label(key, bins), "n": n,
-                "stated_mean": round(stated, 4), "observed_freq": round(hits / n, 4),
-                "shrunk_freq": round(shrunk, 4), "ready": ready,
-                "proposal": (f"When {author} states ~{stated:.0%}, treat it as ~{shrunk:.0%}"
-                             if ready else f"gathering evidence ({n}/{min_n})"),
-            })
-    return {"evidence_type": "inference", "observation_only": True, "automatic_edit": False,
-            "requires_human_decision": True, "min_n": min_n, "prior_strength": prior_strength,
-            "counts": counts, "lessons": lessons}
-
-
-def score_lessons(records: list[dict], min_n: int = 30, margin: float = 0.01) -> dict:
-    """Second recursion level: does following a lesson improve later forecasts?
-
-    ``before``: scored forecasts in the lesson's scope sealed before adoption,
-    excluding the questions cited as the lesson's own evidence (they were
-    chosen because they went badly, which would flatter the lesson).
-    ``after``: scored forecasts that cite the lesson. Verdicts need ``min_n``
-    on both sides; the output only proposes."""
-    pairs, _ = scored_pairs(records)
-    report = []
-    for lid, entry in lessons_index(records).items():
-        adoption = next((d for d in entry["decisions"] if d["decision"] == "adopt"), None)
-        lesson = entry["lesson"]
-        row = {"lesson_id": lid, "text": lesson["text"], "scope": lesson["scope"],
-               "status": lesson_status(entry)}
-        if adoption is None:
-            report.append(dict(row, verdict="not_adopted"))
-            continue
-        evidence = set(lesson["evidence_questions"])
-        in_scope = [x for x in pairs if lesson["scope"] in ("*", x["author"])]
-        before = [x for x in in_scope
-                  if x["seq"] < adoption["seq"] and x["question_id"] not in evidence]
-        after = [x for x in in_scope if lid in x["lessons"]]
-        b_before, b_after = brier(before), brier(after)
-        delta = None if b_before is None or b_after is None else b_after - b_before
-        if len(before) < min_n or len(after) < min_n:
-            verdict = "insufficient"
-        elif delta < -margin:
-            verdict = "helps"
-        elif delta > margin:
-            verdict = "hurts"
-        else:
-            verdict = "neutral"
-        report.append(dict(row, n_before=len(before), n_after=len(after), brier_before=b_before,
-                           brier_after=b_after, delta=delta, verdict=verdict,
-                           proposal=("propose retiring it: forecasts got worse"
-                                     if verdict == "hurts" else None)))
-    return {"evidence_type": "inference", "observation_only": True,
-            "requires_human_decision": True, "min_n": min_n, "margin": margin,
-            "lessons": report}
-
-
 # CLI
 
 def json_arg(value: str | None) -> dict | None:
@@ -706,7 +489,7 @@ def json_arg(value: str | None) -> dict | None:
         except OSError as exc:
             raise GateError(f"cannot read {value}: {exc}") from exc
     try:
-        data = json.loads(value, parse_constant=_reject_constant)
+        data = eio.loads_strict(value, GateError)
     except json.JSONDecodeError as exc:
         raise GateError("expected a JSON object, or @path to one") from exc
     if not isinstance(data, dict):
@@ -734,6 +517,8 @@ def _verify_command(args: argparse.Namespace) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    import forecast_scoring as fs  # imports this module; loaded lazily to avoid a cycle
+
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ledger", required=True, type=Path)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -769,12 +554,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--question", required=True)
     p.add_argument("--klines", required=True, type=Path)
     p.set_defaults(run=lambda a: resolve_auto(a.ledger, a.question, a.klines))
-    sub.add_parser("score").set_defaults(run=_read_only(score))
+    sub.add_parser("score").set_defaults(run=_read_only(fs.score))
     p = sub.add_parser("learn")
     p.add_argument("--min-n", type=int, default=30)
     p.add_argument("--prior-strength", type=float, default=20.0)
     p.set_defaults(run=lambda a: _read_only(
-        lambda r: learn(r, a.min_n, a.prior_strength))(a))
+        lambda r: fs.learn(r, a.min_n, a.prior_strength))(a))
     p = sub.add_parser("lesson-propose")
     p.add_argument("--text", required=True)
     p.add_argument("--scope", required=True)
@@ -793,7 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-n", type=int, default=30)
     p.add_argument("--margin", type=float, default=0.01)
     p.set_defaults(run=lambda a: _read_only(
-        lambda r: score_lessons(r, a.min_n, a.margin))(a))
+        lambda r: fs.score_lessons(r, a.min_n, a.margin))(a))
     return parser
 
 

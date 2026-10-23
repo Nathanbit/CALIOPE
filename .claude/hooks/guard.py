@@ -132,13 +132,16 @@ def pre_bash(data: dict, root: Path) -> int:
 
 def frozen_files(root: Path) -> set[str]:
     """Rutas (relativas a la raíz) que algún MANIFEST.sha256 congela."""
+    repo = str(Path(__file__).resolve().parents[2])
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    import evidence_io  # único dueño del formato sha256sum (en el repo de la guarda)
+
     frozen: set[str] = set()
     for manifest in root.glob("projects/*/MANIFEST.sha256"):
         base = manifest.parent.relative_to(root).as_posix()
-        for line in manifest.read_text(encoding="utf-8", errors="replace").splitlines():
-            parts = line.strip().split(maxsplit=1)
-            if len(parts) == 2:
-                frozen.add(f"{base}/{parts[1].lstrip('*').strip()}")
+        for entry in evidence_io.parse_sha256_manifest(manifest):
+            frozen.add(f"{base}/{entry.path}")
     return frozen
 
 

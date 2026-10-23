@@ -31,6 +31,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import evidence_io as eio
+
 RESOLVER_VERSION = "1.1"
 MAX_CANDLES = 500_000
 SYMBOL = re.compile(r"[A-Z0-9]{2,30}")
@@ -49,13 +51,8 @@ class ResolutionError(Exception):
 
 
 def to_ms(value: str, field: str) -> int:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (AttributeError, TypeError, ValueError) as exc:
-        raise ResolutionError(f"{field}: not an ISO-8601 timestamp") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ResolutionError(f"{field}: timezone required")
-    return int(parsed.astimezone(timezone.utc).timestamp() * 1000)
+    moment = eio.parse_aware_time(value, field, ResolutionError)
+    return int(moment.timestamp() * 1000)
 
 
 def iso_ms(ms: int) -> str:

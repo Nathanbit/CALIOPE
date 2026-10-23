@@ -7,7 +7,8 @@ paths:
 Condensado de `rules/common` y `rules/python` de ECC (affaan-m/ECC, MIT); manda
 `AGENTS.md` si algo choca.
 
-- Raíz (`caliope_loop.py`, `recursive_evidence.py`, `prediction_ledger.py`,
+- Raíz (`caliope_loop.py`, `caliope_doctor.py`, `recursive_evidence.py`,
+  `prediction_ledger.py`, `forecast_scoring.py`, `resolver.py`, `evidence_io.py`,
   `tools/`, `.claude/hooks/`): solo biblioteca estándar, Python 3.11+. Pruebas
   con `unittest` en `tests/`.
 - `archive/`: sin mantenimiento. No importes nada de `archive/` desde el núcleo.
