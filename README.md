@@ -24,7 +24,7 @@ de verdad mejoraron los pronósticos.
 |---|---|---|
 | **Preguntar** | Pregunta binaria con fecha absoluta, fuente y criterio de resolución | Cambiar la pregunta después: si se reformula, es otra pregunta |
 | **Pronosticar** | Cada autor sella su probabilidad en una cadena SHA-256 | Pronosticar con el resultado ya conocido, o editar, reordenar o borrar líneas |
-| **Resolver** | Resultado `true`, `false` o `void` (con motivo), solo después del plazo y con su fuente | Resolver antes de tiempo, sin pronósticos o con fecha futura |
+| **Resolver** | Resultado `true`, `false` o `void` (con motivo), solo después del plazo y con su fuente. Con una regla de máquina, `resolve-auto` lo decide solo a partir de las velas | Resolver antes de tiempo, sin pronósticos, con fecha futura o con datos incompletos |
 | **Puntuar** | Brier y log score por autor, frente a una moneda al aire y a la tasa base, con descomposición de Murphy | Llamar "habilidad" a algo que no supera al azar, o sacar conclusiones con menos de 30 casos (avisa) |
 
 ### 2. Aprendizaje recursivo, en dos niveles
@@ -103,7 +103,7 @@ Guía completa: [`docs/PREDICTION_LEDGER.md`](docs/PREDICTION_LEDGER.md).
 
 ## Lo que falta
 
-1. **Resolución automática**: criterios legibles por máquina y un resolutor que lea los datos, sin intervención humana.
+1. ~~**Resolución automática**~~ ✅ Hecho: reglas legibles por máquina y `resolve-auto` sobre velas descargadas con `tools/fetch_klines.py`.
 2. **IAs y MacroFlow como autores**: que cada revisión del runner y cada señal del indicador queden como pronósticos puntuables.
 3. **Registrar sin fricción**: sellar una predicción con un solo mensaje.
 4. **Un rival base automático**, calculado con volatilidad histórica, al que haya que ganar.

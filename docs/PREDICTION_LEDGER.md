@@ -32,6 +32,39 @@ python prediction_ledger.py --ledger $L learn
 `doctor` verifica la cadena de todos los `projects/*/predictions/*.jsonl` y
 falla si un registro fue editado, reordenado o borrado.
 
+## Resolución automática
+
+Una pregunta puede llevar una **regla legible por máquina** (`--rule`). La
+regla forma parte del id: no se puede cambiar después. Tras el plazo, el
+resolutor evalúa la regla sobre las velas observadas **sin ver los
+pronósticos**, y registra el hash de los datos usados.
+
+```powershell
+# Al preguntar: la regla en JSON (o la ruta a un archivo .json)
+python prediction_ledger.py --ledger $L ask --text "BTC toca 84.000 antes que 85.200" `
+  --horizon-end 2026-10-22T00:15:00Z --source "BINANCE:BTCUSDT 1m" `
+  --criteria "Primer nivel tocado por máximos/mínimos de 1m; ninguno = void" `
+  --rule '{"kind":"touch_first","symbol":"BTCUSDT","interval":"1m","start":"2026-10-21T18:17:00Z","lower":84000,"upper":85200,"true_if":"lower_first"}'
+
+# Tras el plazo, en tu PC (este entorno no llega a Binance):
+python tools/fetch_klines.py --symbol BTCUSDT --interval 1m `
+  --start 2026-10-21T18:17:00Z --end 2026-10-22T00:15:00Z `
+  --out projects/macroflow/predictions/data/BTCUSDT_1m_20261021.json
+python prediction_ledger.py --ledger $L resolve-auto --question q-... `
+  --klines projects/macroflow/predictions/data/BTCUSDT_1m_20261021.json
+```
+
+| Regla | Resultado |
+|---|---|
+| `touch_first` (`lower`, `upper`, `true_if`) | Qué nivel tocan primero los mínimos/máximos. Ninguno → `void`. Ambos en la misma vela → `void` (el orden no se puede saber) |
+| `touch` (`level`, `side`: `at_or_below`/`at_or_above`) | Si el precio toca el nivel en algún momento |
+| `close_beyond` (`level`, `side`: `below`/`above`) | Si alguna vela cerrada cierra más allá del nivel. Una mecha no cuenta |
+
+El resolutor **falla cerrado** si falta una sola vela de la ventana, si el
+símbolo o el intervalo no coinciden, si hay precios inválidos o si la regla no
+está alineada a las velas. Datos que faltan nunca se leen como "no pasó nada".
+`fetch_klines.py` solo usa la API pública de Binance: sin claves ni cuenta.
+
 ## Compuertas (fallo cerrado, código de salida 2)
 
 | Compuerta | Qué impide |
