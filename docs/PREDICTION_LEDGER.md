@@ -62,6 +62,26 @@ la skill `caliope-predict` convierte un mensaje como "sella: BTC toca 80.000
 antes del viernes, 30%" en el concepto, enseña el dry run y sella solo con tu
 confirmación.
 
+## Estado continuo entre pronósticos (idea Coconut)
+
+Inspirado en *Chain of Continuous Thought* de Meta FAIR
+([arXiv 2412.06769](https://arxiv.org/abs/2412.06769)): en vez de razonar de
+cero en palabras en cada paso, el modelo pasa un **estado continuo** al
+siguiente. CALIOPE no entrena modelos; adopta la idea como cadena auditable:
+
+- Cada pronóstico guarda el `thought_state` de su autor **justo antes** de
+  pronosticar: su calibración contraída por tramo de probabilidad, su Brier,
+  su historial y la tasa observada en la clase de concepto de la pregunta, las
+  lecciones adoptadas en su ámbito y `parent`, el hash de su pronóstico
+  anterior. Los pronósticos de cada autor forman así una cadena continua.
+- `verify` recalcula ese estado desde los registros anteriores: si alguien
+  declara un historial o una calibración que el ledger no mostraba, falla,
+  aunque el hash del registro sea correcto.
+- `state --author X [--question q-...]` enseña el estado antes de
+  pronosticar; la skill `caliope-predict` lo muestra para que cada resultado
+  informe la siguiente decisión. Los pronósticos retroactivos no llevan estado
+  (el ledger posterior se filtraría en él).
+
 ## Resolución automática
 
 Una pregunta puede llevar una **regla legible por máquina** (`--rule`). La

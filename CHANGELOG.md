@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.0 — 2026-10-23
+
+Estado continuo entre pronósticos (idea de *Chain of Continuous Thought*,
+Coconut, de Meta FAIR, sin el modelo neuronal).
+
+- Cada pronóstico guarda `thought_state`: calibración contraída del autor por
+  tramo, Brier, historial y tasa observada en la clase de concepto, lecciones
+  adoptadas y `parent` (su pronóstico anterior). `verify` lo recalcula desde
+  los registros previos y rechaza un estado inflado aunque el hash sea válido.
+- Comando `state --author X [--question q-...]`; la skill `caliope-predict`
+  lo muestra antes de sellar.
+- Pronósticos retroactivos sin estado, para que el ledger posterior no se
+  filtre. 6 tests nuevos.
+
 ## 0.15.0 — 2026-10-23
 
 Paso 2: sellar una predicción en un paso, con conceptos (idea del Large

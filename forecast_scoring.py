@@ -18,7 +18,10 @@ def scored_pairs(records: list[dict]) -> tuple[list[dict], dict]:
     """One forecast per author and question: the first one sealed. Later
     forecasts by the same author are counted but never scored, so repeating
     a forecast cannot improve a score."""
-    questions, forecasts, resolutions = pl.index(records)
+    return _pairs(*pl.index(records))
+
+
+def _pairs(questions: dict, forecasts: dict, resolutions: dict) -> tuple[list[dict], dict]:
     pairs = []
     counts = {"questions": len(questions), "open": 0, "void": 0, "resolved": 0,
               "failures": 0, "repeat_forecasts_ignored": 0}
@@ -220,3 +223,47 @@ def score_lessons(records: list[dict], min_n: int = 30, margin: float = 0.01) ->
     return {"evidence_type": "inference", "observation_only": True,
             "requires_human_decision": True, "min_n": min_n, "margin": margin,
             "lessons": report}
+
+
+THOUGHT_VERSION = "1.0"
+
+
+def thought_state(state: "pl.State", author: str, concept_class: str | None,
+                  bins: int = 5, prior_strength: float = 20.0) -> dict:
+    """The author's continuous state at a point of the ledger.
+
+    Idea adapted from Meta FAIR's Coconut (Chain of Continuous Thought,
+    arXiv 2412.06769): instead of re-reasoning from scratch in words, each
+    step carries a continuous state forward. Here that state is numeric and
+    reproducible: the author's shrunk calibration per probability bin, their
+    record and the observed rate on this concept class, the lessons in force
+    and a link to their previous forecast. Every forecast stores it, and
+    ``verify`` recomputes it from the records before that forecast, so nobody
+    can claim to have known what the ledger did not yet show."""
+    pairs, _ = _pairs(state.questions, state.forecasts, state.resolutions)
+    own = [x for x in pairs if x["author"] == author]
+    calibration = []
+    for key, group in sorted(_grouped(own, bins).items()):
+        n = len(group)
+        stated = sum(x["p"] for x in group) / n
+        hits = sum(x["y"] for x in group)
+        calibration.append({"bin": _bin_label(key, bins), "n": n, "stated": round(stated, 6),
+                            "shrunk_freq": round((hits + prior_strength * stated)
+                                                 / (n + prior_strength), 6)})
+    same_class = [x for x in pairs if concept_class and x["concept_class"] == concept_class]
+    own_class = [x for x in same_class if x["author"] == author]
+    previous = [r for items in state.forecasts.values() for r in items if r["author"] == author]
+    lessons = sorted(lid for lid, entry in state.lessons.items()
+                     if pl.lesson_status(entry) == "adopted"
+                     and entry["lesson"]["scope"] in ("*", author))
+
+    def rounded(value: float | None) -> float | None:
+        return None if value is None else round(value, 6)
+    return {"version": THOUGHT_VERSION, "author": author, "n": len(own),
+            "brier": rounded(brier(own)), "calibration": calibration,
+            "concept_class": concept_class, "class_n": len(same_class),
+            "class_observed_rate": rounded(sum(x["y"] for x in same_class) / len(same_class)
+                                           if same_class else None),
+            "author_class_n": len(own_class), "author_class_brier": rounded(brier(own_class)),
+            "adopted_lessons": lessons,
+            "parent": max(previous, key=lambda r: r["seq"])["hash"] if previous else None}

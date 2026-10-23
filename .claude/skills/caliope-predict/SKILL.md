@@ -29,7 +29,19 @@ Autor: la persona (`nathan`) salvo que diga que es tuya (`claude`) o de un
 tercero (`experto:<nombre>`). Probabilidad: la que dio, entre 0 y 1. Si no
 dio probabilidad, pregúntala: sin número no hay predicción puntuable.
 
-## 2. Mostrar antes de sellar
+## 2. Mostrar el estado continuo del autor
+
+```bash
+python prediction_ledger.py --ledger <ledger> state --author <autor>
+```
+
+Resume en una línea lo que dice su historial (por ejemplo, "tus 80% han
+salido 50% en 4 casos" o "aún sin historial"), y si existe, la tasa observada
+de esta clase de concepto. Es información, no una corrección: la persona
+decide si ajusta su probabilidad. Ese mismo estado queda grabado en el
+pronóstico y `verify` lo recalcula.
+
+## 3. Mostrar antes de sellar
 
 ```bash
 python prediction_ledger.py --ledger projects/<proyecto>/predictions/ledger.jsonl \
@@ -41,7 +53,7 @@ la clase de concepto y la probabilidad. Si el dry run falla (por ejemplo,
 "already satisfies": el precio ya cumple el evento), explícalo y propone el
 ajuste; no fuerces el sellado.
 
-## 3. Sellar solo con confirmación
+## 4. Sellar solo con confirmación
 
 Con un "sí" explícito, repite el comando sin `--dry-run`. Después:
 
