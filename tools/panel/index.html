@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel CALIOPE</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1c1a; --muted: #6b6860; --line: #e2dfd6;
+    --accent: #2f5d50; --accent-ink: #ffffff; --warn: #8a5a00; --warn-bg: #fff4dc;
+    --err: #9b2c2c; --err-bg: #fde8e8; --ok: #2f6b3a; --code-bg: #f0eee8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --panel: #1f1e1b; --ink: #ecebe6; --muted: #a29f95; --line: #34322d;
+      --accent: #7fb8a6; --accent-ink: #10201b; --warn: #f0c36a; --warn-bg: #3a2f17;
+      --err: #f19a9a; --err-bg: #3b1d1d; --ok: #8fd19e; --code-bg: #262521;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 16px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  input, select, textarea { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px;
+            background: var(--bg); color: var(--ink); font: inherit; }
+  textarea { min-height: 64px; resize: vertical; }
+  button { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel);
+           color: var(--ink); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.rec { background: var(--err); color: #fff; border-color: var(--err); }
+  button:disabled { opacity: .5; cursor: default; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .msg { padding: 8px 10px; border-radius: 6px; margin: 6px 0; font-size: 14px; }
+  .msg.err { background: var(--err-bg); color: var(--err); }
+  .msg.warn { background: var(--warn-bg); color: var(--warn); }
+  .msg.ok { color: var(--ok); }
+  pre { background: var(--code-bg); padding: 10px; border-radius: 6px; overflow-x: auto;
+        white-space: pre-wrap; word-break: break-all; font-size: 12.5px; margin: 6px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line);
+          font-size: 12px; margin: 1px 2px; white-space: nowrap; }
+  .big { font-size: 17px; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Panel CALIOPE</h1>
+  <p class="sub">Dicta o escribe tu predicción. El panel propone el concepto, <code>seal --dry-run</code> lo verifica y tú decides si se sella. Este panel nunca escribe en el ledger ni coloca órdenes.</p>
+
+  <section>
+    <h2>1. Tu predicción</h2>
+    <div class="row" style="margin-bottom:8px">
+      <button id="mic" class="primary">🎙 Dictar</button>
+      <select id="model" style="width:auto" title="Modelo de voz (corre en tu navegador)">
+        <option value="onnx-community/whisper-base">Whisper base (~80 MB, mejor)</option>
+        <option value="onnx-community/whisper-tiny">Whisper tiny (~40 MB, rápido)</option>
+      </select>
+      <span id="voiceStatus" class="muted">La voz se transcribe en tu navegador; el audio no sale de tu PC.</span>
+    </div>
+    <textarea id="text" placeholder="Ej.: BTC toca 82.500 hoy, 60%  ·  BTC cierra por debajo de 80 mil el domingo, 30%  ·  BTC toca 80k antes que 84k el lunes, 40%"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="parse" class="primary">Interpretar</button>
+      <span id="parseNote" class="muted"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Revisa los campos</h2>
+    <div class="grid">
+      <div><label for="asset">Activo (Binance)</label><input id="asset" value="BTCUSDT"></div>
+      <div><label for="event">Evento</label>
+        <select id="event">
+          <option value="touch">toca el nivel</option>
+          <option value="close_beyond">cierra una vela más allá</option>
+          <option value="touch_first">toca un nivel antes que otro</option>
+        </select></div>
+      <div><label for="levels">Nivel (o dos niveles separados por coma)</label><input id="levels" inputmode="decimal"></div>
+      <div><label for="side">Lado</label>
+        <select id="side"><option value="">automático según el precio</option>
+          <option value="at_or_above">toca arriba (≥)</option><option value="at_or_below">toca abajo (≤)</option>
+          <option value="above">cierra por encima</option><option value="below">cierra por debajo</option></select></div>
+      <div><label for="trueIf">Si son dos niveles: gana si toca primero</label>
+        <select id="trueIf"><option value="">el que dijiste primero</option>
+          <option value="lower_first">el de abajo</option><option value="upper_first">el de arriba</option></select></div>
+      <div><label for="deadline">Fecha límite (tu hora local)</label><input id="deadline" type="datetime-local"></div>
+      <div><label for="prob">Probabilidad (%)</label><input id="prob" type="number" min="0" max="100" step="1"></div>
+      <div><label for="author">Autor</label>
+        <input id="author" list="authors" value="nathan">
+        <datalist id="authors"><option value="nathan"><option value="claude"><option value="ia:gemini">
+          <option value="ia:chatgpt"><option value="indicador:macroflow"><option value="sim:mirofish"><option value="experto:"></datalist></div>
+    </div>
+    <div class="grid" style="margin-top:12px">
+      <div><label for="ref">Precio de referencia (observado)</label>
+        <div class="row"><input id="ref" type="number" step="any" style="flex:1">
+          <button id="fetchPrice" title="Lee el último precio de la API pública de Binance desde tu navegador">Leer de Binance</button></div></div>
+      <div><label for="source">De dónde salió ese precio</label><input id="source" placeholder="Ej.: pantalla BloFin 17:42"></div>
+    </div>
+    <div style="margin-top:12px"><label for="rationale">Motivo</label><input id="rationale" placeholder="Por qué lo crees"></div>
+    <div style="margin-top:12px"><label for="ledger">Ledger</label><input id="ledger" value="projects/macroflow/predictions/ledger.jsonl"></div>
+  </section>
+
+  <section>
+    <h2>3. Sellar</h2>
+    <div id="result" class="muted">Interpreta un mensaje o rellena los campos.</div>
+  </section>
+
+  <section>
+    <h2>Ledger</h2>
+    <div class="row" style="margin-bottom:8px">
+      <button id="loadLedger">Cargar ledger</button>
+      <span class="muted">Lectura local del archivo. La autoridad es <code>verify</code> y <code>rival</code> en la terminal: esta vista no comprueba la cadena de hashes.</span>
+    </div>
+    <div id="ledgerView"></div>
+  </section>
+</main>
+
+<script type="module">
+import { parseMessage, buildConcept, sealCommands, numbers, normalize } from './parse.js';
+
+const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
+const $ = (id) => document.getElementById(id);
+const pad = (n) => String(n).padStart(2, '0');
+const localInput = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = (n) => Number(n).toLocaleString('es-EC', { maximumFractionDigits: 2 });
+
+// ---------- Voz (Whisper en el navegador, con las lecciones de runonweb.ai) ----------
+let asr = null, asrModel = null, recorder = null, chunks = [];
+
+async function loadAsr() {
+  const model = $('model').value;
+  if (asr && asrModel === model) return asr;
+  $('voiceStatus').textContent = 'Cargando el modelo de voz (solo la primera vez)…';
+  const { pipeline, env } = await import(TRANSFORMERS);
+  env.allowLocalModels = false;
+  // Sin aislamiento entre orígenes, el WASM con hilos falla: un hilo (runonweb.ai).
+  if (env.backends?.onnx?.wasm && !globalThis.crossOriginIsolated) env.backends.onnx.wasm.numThreads = 1;
+  // q8 solo en WASM: en WebGPU q8 da resultados basura sin avisar (runonweb.ai).
+  asr = await pipeline('automatic-speech-recognition', model, {
+    device: 'wasm', dtype: 'q8',
+    progress_callback: (p) => {
+      if (p.status === 'progress' && p.total) $('voiceStatus').textContent = `Descargando ${p.file}: ${Math.round(p.loaded / p.total * 100)}%`;
+    },
+  });
+  asrModel = model;
+  return asr;
+}
+
+async function toSamples(blob) {
+  const ctx = new AudioContext({ sampleRate: 16000 });
+  try {
+    const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
+    return audio.getChannelData(0);
+  } finally { ctx.close(); }
+}
+
+$('mic').addEventListener('click', async () => {
+  if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    loadAsr().catch(() => {}); // descarga mientras hablas
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (e) => chunks.push(e.data);
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      $('mic').textContent = '🎙 Dictar'; $('mic').className = 'primary'; $('mic').disabled = true;
+      try {
+        const pipe = await loadAsr();
+        $('voiceStatus').textContent = 'Transcribiendo…';
+        const samples = await toSamples(new Blob(chunks, { type: recorder.mimeType }));
+        const out = await pipe(samples, { language: 'es', task: 'transcribe', chunk_length_s: 30 });
+        $('text').value = (out.text || '').trim();
+        $('voiceStatus').textContent = 'Listo. Revisa el texto: el modelo puede oír mal un número.';
+        interpret();
+      } catch (err) {
+        $('voiceStatus').textContent = `No se pudo transcribir: ${err.message}. Escríbelo a mano.`;
+      } finally { $('mic').disabled = false; }
+    };
+    recorder.start();
+    $('mic').textContent = '■ Detener'; $('mic').className = 'rec';
+    $('voiceStatus').textContent = 'Grabando… di activo, nivel, plazo y probabilidad.';
+  } catch (err) {
+    $('voiceStatus').textContent = `Sin micrófono: ${err.message}. Abre el panel desde http://127.0.0.1 (ver tools/panel/README.md).`;
+  }
+});
+
+// ---------- Interpretar y construir ----------
+function interpret() {
+  const f = parseMessage($('text').value, new Date());
+  $('asset').value = f.asset;
+  $('event').value = f.event;
+  $('levels').value = f.levels.join(', ');
+  $('side').value = '';
+  $('trueIf').value = f.true_if || '';
+  if (f.date) $('deadline').value = localInput(f.date);
+  if (f.probability !== null) $('prob').value = Math.round(f.probability * 1000) / 10;
+  if (!$('rationale').value) $('rationale').value = $('text').value.trim();
+  $('parseNote').textContent = (f.label ? `Plazo: ${f.label}. ` : '') +
+    (f.missing.length ? `Falta: ${f.missing.join(', ')}.` : 'Todo leído; revisa los campos.');
+  hint = f.hint;
+  render();
+}
+let hint = null;
+
+function fields() {
+  const levels = $('levels').value.split(/;|,\s+/).flatMap((part) => numbers(normalize(part)).slice(0, 1))
+    .map((n) => n.value).filter((n) => n > 0);
+  const d = $('deadline').value ? new Date($('deadline').value) : null;
+  return { asset: $('asset').value.trim().toUpperCase(), event: $('event').value, levels,
+           side: $('side').value || null, true_if: $('trueIf').value || null, hint, date: d };
+}
+
+function render() {
+  const f = fields();
+  const ref = Number($('ref').value);
+  const probText = $('prob').value.trim();
+  const prob = probText === '' ? null : Number(probText) / 100;
+  const { concept, errors, warnings, startMs } = buildConcept(f, ref, $('source').value, new Date());
+  const el = $('result');
+  const parts = [];
+  if (prob === null || !(prob >= 0 && prob <= 1)) errors.push('Falta la probabilidad (0 a 100): sin número no se puede puntuar.');
+  if (!/^[a-z0-9][a-z0-9_.-]{0,39}(:[a-z0-9][a-z0-9_.-]{0,39})?$/.test($('author').value.trim().toLowerCase())) errors.push('Autor no válido: nathan, ia:gemini, indicador:macroflow…');
+  errors.forEach((e) => parts.push(`<div class="msg err">${esc(e)}</div>`));
+  warnings.forEach((w) => parts.push(`<div class="msg warn">${esc(w)}</div>`));
+  if (concept && !errors.length) {
+    const cmds = sealCommands({ concept, author: $('author').value.trim().toLowerCase(), probability: prob,
+                                rationale: $('rationale').value, ledger: $('ledger').value.trim() });
+    const deadline = new Date(startMs);
+    const what = concept.event === 'touch_first'
+      ? `${concept.asset} toca ${fmt(concept.true_if === 'lower_first' ? concept.lower : concept.upper)} antes que ${fmt(concept.true_if === 'lower_first' ? concept.upper : concept.lower)}`
+      : `${concept.asset} ${concept.event === 'touch' ? 'toca' : 'cierra'} ${concept.side.includes('above') ? '≥' : '≤'} ${fmt(concept.level)}`;
+    parts.push(`<p class="big">${esc(what)} · hasta ${esc(new Date(concept.horizon_end).toLocaleString('es-EC'))} · ${Math.round(prob * 1000) / 10}%</p>`);
+    parts.push(`<p class="muted">Velas de ${concept.interval}. La ventana empieza a las <b>${deadline.toLocaleTimeString('es-EC')}</b>: sella antes o el ledger lo rechazará (el panel se actualiza solo).</p>`);
+    parts.push(`<p>En PowerShell, dentro de la carpeta CALIOPE: primero la prueba, que no escribe nada.</p>
+      <pre id="cmdDry">${esc(cmds.dryRun)}</pre><button data-copy="cmdDry">Copiar prueba</button>
+      <p style="margin-top:14px">Si la prueba sale bien y estás de acuerdo, sella de verdad:</p>
+      <pre id="cmdSeal">${esc(cmds.seal)}</pre><button data-copy="cmdSeal">Copiar sellado</button>
+      <p class="muted" style="margin-top:10px">Concepto:</p><pre>${esc(JSON.stringify(concept, null, 2))}</pre>`);
+  }
+  el.className = '';
+  el.innerHTML = parts.join('') || '<span class="muted">Interpreta un mensaje o rellena los campos.</span>';
+}
+
+$('result').addEventListener('click', async (e) => {
+  const id = e.target.dataset?.copy;
+  if (!id) return;
+  try { await navigator.clipboard.writeText($(id).textContent); e.target.textContent = 'Copiado'; }
+  catch { e.target.textContent = 'Selecciónalo y copia a mano'; }
+});
+
+$('parse').addEventListener('click', interpret);
+for (const id of ['asset', 'event', 'levels', 'side', 'trueIf', 'deadline', 'prob', 'author', 'ref', 'source', 'rationale', 'ledger']) {
+  $(id).addEventListener('input', render);
+}
+setInterval(render, 20_000); // el inicio de la ventana depende de la hora
+
+// ---------- Precio observado: API pública de Binance, sin claves ----------
+$('fetchPrice').addEventListener('click', async () => {
+  const symbol = $('asset').value.trim().toUpperCase();
+  $('fetchPrice').disabled = true;
+  for (const host of ['https://api.binance.com', 'https://data-api.binance.vision']) {
+    try {
+      const r = await fetch(`${host}/api/v3/ticker/price?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
+      if (!r.ok) continue;
+      const data = await r.json();
+      const price = Number(data.price);
+      if (!(price > 0)) continue;
+      $('ref').value = price;
+      $('source').value = `Binance ${host.includes('vision') ? 'data-api' : 'api'} ticker/price ${symbol} ${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}`;
+      break;
+    } catch { /* siguiente host */ }
+  }
+  if (!$('ref').value) $('source').placeholder = 'No se pudo leer Binance: escribe el precio de tu pantalla';
+  $('fetchPrice').disabled = false;
+  render();
+});
+
+// ---------- Ledger (solo lectura) ----------
+$('loadLedger').addEventListener('click', async () => {
+  const view = $('ledgerView');
+  try {
+    const r = await fetch('../../' + $('ledger').value.trim(), { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const records = (await r.text()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    view.innerHTML = ledgerHtml(records);
+  } catch (err) {
+    view.innerHTML = `<div class="msg err">No se pudo leer el ledger (${esc(err.message)}). Abre el panel desde la raíz de CALIOPE: ver tools/panel/README.md.</div>`;
+  }
+});
+
+function ledgerHtml(records) {
+  const questions = new Map(), forecasts = new Map(), resolutions = new Map();
+  for (const rec of records) {
+    if (rec.type === 'question') questions.set(rec.question_id, rec);
+    if (rec.type === 'forecast') (forecasts.get(rec.question_id) || forecasts.set(rec.question_id, []).get(rec.question_id)).push(rec);
+    if (rec.type === 'resolution') resolutions.set(rec.question_id, rec);
+  }
+  const scores = new Map();
+  const rows = [...questions.values()].reverse().map((q) => {
+    const res = resolutions.get(q.question_id);
+    const seen = new Set();
+    const fs = (forecasts.get(q.question_id) || []).sort((a, b) => a.seq - b.seq).map((f) => {
+      const first = !seen.has(f.author); seen.add(f.author);
+      if (first && res && res.outcome !== 'void' && f.status === 'ok') {
+        const y = res.outcome === 'true' ? 1 : 0;
+        const s = scores.get(f.author) || { n: 0, sum: 0 };
+        s.n += 1; s.sum += (f.probability - y) ** 2; scores.set(f.author, s);
+      }
+      return `<span class="pill">${esc(f.author)} ${f.status === 'ok' ? Math.round(f.probability * 100) + '%' : 'fallo'}</span>`;
+    }).join('');
+    const status = res ? `<b>${esc(res.outcome)}</b>` : (new Date(q.horizon_end) < new Date() ? 'por resolver' : 'abierta');
+    return `<tr><td>${esc(q.text)}</td><td>${esc(new Date(q.horizon_end).toLocaleString('es-EC'))}</td><td>${status}</td><td>${fs}</td></tr>`;
+  });
+  const board = [...scores.entries()].sort((a, b) => a[1].sum / a[1].n - b[1].sum / b[1].n)
+    .map(([a, s]) => `<tr><td>${esc(a)}</td><td>${s.n}</td><td>${(s.sum / s.n).toFixed(4)}</td></tr>`).join('');
+  return `<p class="muted">${records.length} registros · ${questions.size} preguntas · ${resolutions.size} resueltas</p>
+    <div class="scroll"><table><thead><tr><th>Pregunta</th><th>Cierra</th><th>Estado</th><th>Pronósticos</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>
+    <h2 style="margin-top:16px">Brier por autor (menor es mejor)</h2>
+    ${board ? `<div class="scroll"><table><thead><tr><th>Autor</th><th>n</th><th>Brier</th></tr></thead><tbody>${board}</tbody></table></div>
+    <p class="muted">Con menos de 30 casos no significa nada todavía. Para el veredicto con intervalo, usa <code>python prediction_ledger.py --ledger … rival</code>.</p>` : '<p class="muted">Aún no hay pronósticos resueltos.</p>'}`;
+}
+</script>
+</body>
+</html>
