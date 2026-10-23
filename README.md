@@ -49,6 +49,13 @@ no cruce el cero se dice que alguien "le gana al rival". El enjambre
 (`~enjambre`, la media en log-odds de todos los autores de una pregunta) se
 mide igual: la idea de [MiroFish](docs/MIROFISH_REA.md), pero con marcador.
 
+### Panel para sellar al momento
+
+`tools/panel/` es una página local: dictas o escribes "BTC toca 82.500 hoy,
+60%", toma el precio de Binance desde tu navegador y te deja los comandos de
+`seal --dry-run` y `seal`. No escribe en el ledger ni coloca órdenes. Cómo
+abrirlo: [tools/panel/README.md](tools/panel/README.md).
+
 ### Conceptos y estado continuo
 
 - **Conceptos** (idea del *Large Concept Model* de Meta FAIR): una predicción

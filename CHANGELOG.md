@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.0 — 2026-10-23
+
+Panel local para sellar al momento (`tools/panel/`).
+
+- Dictado por voz con Whisper en el navegador (Transformers.js 4.3.1; el
+  audio no sale del PC), con los ajustes de runonweb.ai: WASM `q8`, un hilo.
+- `parse.js` convierte "BTC toca 82.500 hoy, 60%" en un concepto válido:
+  niveles en varias formas, plazos relativos en hora local, inicio de
+  ventana con 3 minutos de margen. Lo que no entiende lo deja vacío.
+- Precio de referencia observado desde la API pública de Binance, sin
+  claves. Comandos de PowerShell para `seal --dry-run` y `seal` con el
+  concepto en `state\concepto.json` (ASCII, sin BOM).
+- Vista de solo lectura del ledger con Brier por autor.
+- `tests/test_panel.py` ejecuta 7 pruebas de `parse.js` con Node.
+
 ## 0.18.0 — 2026-10-23
 
 MiroFish desmontado con el método REA, y el enjambre como algo que se puede medir.
