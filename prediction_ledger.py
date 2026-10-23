@@ -222,6 +222,11 @@ def _check_forecast(state: State, record: dict, recorded: datetime) -> None:
         raise GateError("question already resolved: forecasts after the outcome are refused")
     question = state.questions[qid]
     author = _text(record, "author")
+    if "thought_state" in record:
+        if record.get("sealed_evidence") is not None:
+            raise GateError("backdated forecasts cannot carry a thought state")
+        if record["thought_state"] != _thought(state, qid, author):
+            raise GateError("thought_state does not match the ledger before this forecast")
     status, probability = record.get("status"), record.get("probability")
     if status == "ok":
         if isinstance(probability, bool) or not isinstance(probability, (int, float)) \
@@ -461,14 +466,23 @@ def seal(path: Path, concept: dict, author: str, probability: float | None, rati
 
     def forecast_build(state: State) -> dict:
         return _forecast_body(holder["question_id"], author, probability, rationale, None, None,
-                              lessons_applied)
+                              lessons_applied, state)
     q_record, f_record = commit_many(path, [ask_build, forecast_build], dry_run=dry_run)
     return {"dry_run": dry_run, "question": q_record, "forecast": f_record}
 
 
+def _thought(state: State, qid: str, author: str) -> dict | None:
+    import forecast_scoring as fs  # imports this module; loaded lazily to avoid a cycle
+
+    question = state.questions.get(qid)
+    if question is None:
+        return None
+    return fs.thought_state(state, author, question.get("concept_class"))
+
+
 def _forecast_body(qid: str, author: str, probability: float | None, rationale: str,
                    made_at: str | None, sealed_evidence: dict | None,
-                   lessons_applied: list[str] | None) -> dict:
+                   lessons_applied: list[str] | None, state: State | None = None) -> dict:
     status = "ok"
     if probability is None or isinstance(probability, bool) \
             or not isinstance(probability, (int, float)) or not math.isfinite(probability) \
@@ -476,10 +490,17 @@ def _forecast_body(qid: str, author: str, probability: float | None, rationale: 
         status, probability = FAILURE, None  # never coerced to 0.5, never dropped
     now = utc_now_iso()
     made = iso_utc(parse_time(made_at, "made_at")) if made_at is not None else now
-    return {"type": "forecast", "question_id": qid, "author": (author or "").strip(),
+    body = {"type": "forecast", "question_id": qid, "author": (author or "").strip(),
             "probability": probability, "status": status, "rationale": (rationale or "").strip(),
             "made_at": made, "sealed_evidence": sealed_evidence,
             "lessons_applied": sorted(set(lessons_applied or [])), "recorded_at": now}
+    if state is not None and made_at is None:
+        # Backdated forecasts carry no thought state: the ledger after made_at
+        # would leak into it.
+        thought = _thought(state, qid, body["author"])
+        if thought is not None:
+            body["thought_state"] = thought
+    return body
 
 
 def forecast(path: Path, qid: str, author: str, probability: float | None, rationale: str,
@@ -489,8 +510,8 @@ def forecast(path: Path, qid: str, author: str, probability: float | None, ratio
     (64-hex sha256 of an earlier sealed file and the commit that published it)."""
     if made_at is not None:
         parse_time(made_at, "made_at")
-    return commit(path, lambda _: _forecast_body(qid, author, probability, rationale, made_at,
-                                                 sealed_evidence, lessons_applied))
+    return commit(path, lambda state: _forecast_body(qid, author, probability, rationale, made_at,
+                                                     sealed_evidence, lessons_applied, state))
 
 
 def resolve(path: Path, qid: str, outcome: str, observed: dict, resolved_at: str | None = None,
@@ -582,6 +603,18 @@ def _read_only(command: Callable[[list[dict]], dict]) -> Callable[[argparse.Name
     return run
 
 
+def _state_command(args: argparse.Namespace) -> dict:
+    import forecast_scoring as fs
+
+    state = verify(load(args.ledger))
+    label = None
+    if args.question:
+        if args.question not in state.questions:
+            raise GateError(f"unknown question {args.question}")
+        label = state.questions[args.question].get("concept_class")
+    return fs.thought_state(state, args.author.strip(), label)
+
+
 def _verify_command(args: argparse.Namespace) -> dict:
     records = load(args.ledger)
     verify(records)
@@ -639,6 +672,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--klines", required=True, type=Path)
     p.set_defaults(run=lambda a: resolve_auto(a.ledger, a.question, a.klines))
     sub.add_parser("score").set_defaults(run=_read_only(fs.score))
+    p = sub.add_parser("state", help="the author's continuous thought state now")
+    p.add_argument("--author", required=True)
+    p.add_argument("--question", help="use this question's concept class")
+    p.set_defaults(run=lambda a: _state_command(a))
     p = sub.add_parser("learn")
     p.add_argument("--min-n", type=int, default=30)
     p.add_argument("--prior-strength", type=float, default=20.0)

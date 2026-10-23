@@ -39,6 +39,18 @@ de verdad mejoraron los pronósticos.
    empeoran, CALIOPE propone retirarla; no la retira solo. Una lección nunca
    se evalúa con los datos que la originaron.
 
+### Conceptos y estado continuo
+
+- **Conceptos** (idea del *Large Concept Model* de Meta FAIR): una predicción
+  se sella como estructura con `seal`; el texto y la regla se generan, y el
+  aprendizaje agrupa por clase de concepto.
+- **Estado continuo** (idea de *Chain of Continuous Thought*, Coconut): cada
+  pronóstico guarda el estado de su autor en ese momento y se enlaza al
+  anterior; `verify` lo recalcula.
+
+Ninguna de las dos aloja un modelo neuronal: CALIOPE adopta su arquitectura
+con reglas deterministas y verificables.
+
 ### 3. Gobierno de modelos (`caliope_loop.py`)
 
 Prepara paquetes de revisión para 8 IAs (Perplexity, DeepSeek, Qwen, Z.ai,
