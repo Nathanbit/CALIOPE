@@ -49,7 +49,7 @@ Todo informe, revisión o salida de herramienta separa cuatro tipos:
 |---|---|
 | Cualquiera | `python caliope_loop.py doctor` |
 | Runner / ledger | `python -m unittest discover -s tests -p "test_*.py"` |
-| Predicción sellada | JSON válido, hash añadido a `MANIFEST.sha256` del proyecto y `doctor` en verde antes del resultado |
+| Predicción sellada | `python prediction_ledger.py --ledger <ledger> verify` y `doctor` en verde antes del resultado; nunca editar líneas del ledger |
 | `archive/` | No se modifica salvo para restaurar una pieza; si se restaura, recupera antes su verificación |
 
 Indica explícitamente qué no se verificó. Los datos sintéticos no prueban el
