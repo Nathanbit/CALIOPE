@@ -25,8 +25,9 @@ cualquier clave que falte o sobre):
 | `horizon_end` | La fecha que dice la persona, convertida a UTC y alineada a la vela. Fechas relativas ("el viernes") se resuelven con su zona horaria y se dicen en voz alta |
 | `reference_price` / `reference_source` | **Observado, nunca inventado**: precio actual de Binance (navegador o captura de la persona) y de dónde/cuándo salió. Si no lo puedes observar, pregúntalo |
 
-Autor: la persona (`nathan`) salvo que diga que es tuya (`claude`) o de un
-tercero (`experto:<nombre>`). Probabilidad: la que dio, entre 0 y 1. Si no
+Autor: la persona (`nathan`) salvo que diga que es tuya (`ia:claude`), de otra
+IA (`ia:gemini`), de un indicador (`indicador:macroflow`), de una simulación
+(`sim:mirofish`) o de un tercero (`experto:<nombre>`). Siempre en minúsculas. Probabilidad: la que dio, entre 0 y 1. Si no
 dio probabilidad, pregúntala: sin número no hay predicción puntuable.
 
 ## 2. Mostrar el estado continuo del autor
