@@ -93,8 +93,21 @@ El archivo sellado no se modifica: el resultado vive en el ledger.
 
 - **La fecha de un commit no es prueba de tiempo**: quien controla el
   repositorio puede reescribirla. El registro de *push* de GitHub es mejor
-  evidencia; un sellado con OpenTimestamps (anclado en Bitcoin, sin claves)
-  sería la prueba independiente. Queda pendiente.
+  evidencia; la prueba independiente es OpenTimestamps (anclado en Bitcoin,
+  gratis y sin claves). El entorno de los agentes no llega a sus servidores,
+  así que se sella desde tu equipo tras cada predicción nueva:
+
+  ```powershell
+  pip install opentimestamps-client
+  ots stamp projects/macroflow/predictions/ledger.jsonl   # crea ledger.jsonl.ots
+  git add projects/macroflow/predictions/ledger.jsonl.ots
+  # unas horas después, cuando Bitcoin confirme:
+  ots upgrade projects/macroflow/predictions/ledger.jsonl.ots
+  ots verify  projects/macroflow/predictions/ledger.jsonl.ots
+  ```
+
+  Como el ledger solo crece, cada `.ots` prueba que todas las líneas
+  anteriores existían en ese momento.
 - La cadena prueba que el archivo no cambió desde un hash dado, no que el
   autor no lo reescribiera entero antes de publicarlo. Publicar el hash de
   cabecera fuera del repo cierra ese hueco.
