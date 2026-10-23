@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.0 — 2026-10-22
+
+- CALIOPE se centra en dos piezas: el registro de evidencia y predicciones, y
+  el gobierno de modelos (proponen, verifican compuertas, decide una persona).
+- Se mueven a `archive/`, sin borrar ni cambiar su contenido:
+  - `themis/` → `archive/themis/` (motor heredado, sin integrar).
+  - `labs/macroflow_v0_9_5_import/` → `archive/labs/` (réplica Python en
+    cuarentena, optimizador, puente y broker MT5).
+  - `tools/discipline/` y `tests/test_discipline.py` → `archive/tools/` y
+    `archive/tests/`.
+  - `.claude/skills/` → `archive/claude-skills/` (Claude Code ya no las carga).
+  - `docs/reverse-engineering/` → `archive/docs/`.
+- `README.md` y `AGENTS.md` describen el nuevo enfoque; MacroFlow queda como
+  primer caso de uso en `projects/macroflow`.
+- Verificación: `doctor` sano; 55 tests del núcleo OK. Los tests archivados de
+  disciplina siguen pasando con `python -m unittest archive.tests.test_discipline`.
+
 ## 0.7.1 — 2026-10-21
 
 - `labs/macroflow_v0_9_5_import/macroflow/risk/guards.py`: las compuertas de

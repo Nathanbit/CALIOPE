@@ -49,9 +49,8 @@ Todo informe, revisión o salida de herramienta separa cuatro tipos:
 |---|---|
 | Cualquiera | `python caliope_loop.py doctor` |
 | Runner / ledger | `python -m unittest discover -s tests -p "test_*.py"` |
-| Réplica Python de MacroFlow | `pytest` en `labs/macroflow_v0_9_5_import` y `scripts/causality_report.py` sobre datos reales |
-| Disciplina (`tools/discipline/`) | `python -m unittest tests.test_discipline` |
-| Riesgo / puente | pruebas de `tests/test_risk.py` y `tests/test_router_protections.py` |
+| Predicción sellada | JSON válido, hash añadido a `MANIFEST.sha256` del proyecto y `doctor` en verde antes del resultado |
+| `archive/` | No se modifica salvo para restaurar una pieza; si se restaura, recupera antes su verificación |
 
 Indica explícitamente qué no se verificó. Los datos sintéticos no prueban el
 comportamiento con datos reales, y cero operaciones no permiten estimar
