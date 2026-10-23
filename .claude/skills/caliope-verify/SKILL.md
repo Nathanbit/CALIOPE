@@ -1,6 +1,6 @@
 ---
 name: caliope-verify
-description: Verify a change to CALIOPE before declaring it done, committing or opening a PR. Runs only the checks the changed files require (doctor, root unittest, MacroFlow lab pytest) and reports what remains unverified. Use when the person says "verifica", "¿está listo?", "corre las pruebas", "antes del PR", or after finishing any code change.
+description: Verify a change to CALIOPE before declaring it done, committing or opening a PR. Runs only the checks the changed files require (doctor, root unittest, archived tests) and reports what remains unverified. Use when the person says "verifica", "¿está listo?", "corre las pruebas", "antes del PR", or after finishing any code change.
 ---
 
 # Verificación de CALIOPE

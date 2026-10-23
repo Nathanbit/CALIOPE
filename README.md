@@ -1,195 +1,134 @@
 # CALIOPE
 
-CALIOPE es un **registro verificable de predicciones y decisiones asistidas por
-IA**. Hace dos cosas:
+**Un registro verificable de predicciones y decisiones asistidas por IA.**
 
-1. **Registro de evidencia y predicciones.** Cada afirmación se clasifica como
-   observación, derivación, inferencia o desconocido; cada predicción se sella
-   con fecha y SHA-256 *antes* del resultado y se evalúa después con datos
-   observados, sin redondear a favor.
-2. **Gobierno de modelos.** Los modelos proponen, las compuertas deterministas
-   verifican y una persona decide. El acuerdo entre IAs no convierte una
-   inferencia en hecho, y todo falla cerrado.
+Hoy cualquiera hace predicciones —una persona, un "experto", un modelo de IA,
+un indicador de trading— y casi nadie las mide. CALIOPE las **sella antes del
+resultado**, las **resuelve con datos observados** y **puntúa a cada autor**
+con reglas que no se pueden manipular. Con el tiempo responde con números a
+la pregunta: *¿a quién conviene creer, y cuánto?*
 
-MacroFlow, la estrategia de trading del autor, es el primer caso de uso: un
-usuario de CALIOPE, no su núcleo.
+Además, **aprende de sí mismo**: convierte su historial en lecciones, una
+persona decide cuáles adoptar, y CALIOPE comprueba después si esas lecciones
+de verdad mejoraron los pronósticos.
 
-## Componentes
+> **Regla central.** Los modelos proponen. Las compuertas deterministas
+> verifican. Una persona decide. CALIOPE nunca envía órdenes, publica ni
+> maneja credenciales, y todo lo que no puede comprobar falla cerrado.
 
-- `prediction_ledger.py`: registro de predicciones binarias encadenado por
-  SHA-256: preguntas con criterio de resolución, pronósticos sellados antes
-  del resultado, puntuación Brier/log con calibración de Murphy y aprendizaje
-  recursivo que solo propone (ver `docs/PREDICTION_LEDGER.md`).
-- `recursive_evidence.py`: ledger de evidencia encadenado por SHA-256
-  (observación, hipótesis, candidato, validación, promoción humana).
-- `caliope_loop.py`: runner local, acotado y *fail-closed* para preparar e
-  ingerir revisiones de modelos. No llama modelos, no aplica parches y no opera.
-- `contracts/`: formatos JSON aceptados para observaciones, propuestas,
-  decisiones y aprobaciones humanas.
-- `workflows/`: contratos reproducibles por proyecto.
-- `projects/`: casos que CALIOPE registra y evalúa (hoy, `projects/macroflow`,
-  con sus predicciones selladas en `evidence/`).
-- `runs/`: expedientes generados por el runner; se crea al iniciar el primer run.
-- `docs/`: arquitectura, determinismo, evidencia y límites.
-- `tools/verify.py`: ejecuta solo las comprobaciones que tocan según lo que
-  cambió y declara lo que no se verificó.
-- `CLAUDE.md` y `.claude/`: guardas para agentes de código (bloquean push
-  forzado, `--no-verify`, lectura de credenciales y edición de evidencia
-  congelada o de ledgers), revisores en contexto limpio y reglas por tipo de
-  archivo.
-- `archive/`: piezas retiradas del núcleo (ver `archive/README.md`). Se
-  conservan sin borrar, pero no se mantienen ni se verifican con `doctor`.
+## Qué hace
 
-## Regla central
+### 1. Registro de predicciones (`prediction_ledger.py`)
 
-Los modelos proponen. Las compuertas deterministas verifican. La persona decide
-cualquier acción real. En trading, CALIOPE puede analizar y producir código de
-investigación, pero no enviar órdenes ni manejar credenciales.
-
-## Primer flujo real
-
-`workflows/macroflow-review.yaml` organiza la revisión de MacroFlow mediante
-cinco roles separados: causalidad Pine, riesgo/ejecución, estadística, contexto
-de mercado y red-team. El sintetizador solo recibe propuestas que superen sus
-criterios de aceptación.
-
-## Mejora recursiva
-
-`workflows/macroflow-recursive-improvement.yaml` especifica el ciclo acotado de
-automejora. Perplexity, DeepSeek, Qwen, Z.ai, Kimi, Gemini, Meta y NVIDIA
-Nemotron revisan ámbitos distintos; Claude/Themis organiza la evidencia sin
-votar ni saltarse compuertas. Los contratos JSON están en `contracts/` y el
-diseño completo en `docs/RECURSIVE_MACROFLOW_LOOP.md`.
-
-`recursive_evidence.py` añade el registro empírico por operación y cartera. El
-ledger enlaza cada evento mediante SHA-256 y separa cinco estados:
-observación, hipótesis, candidato, validación y promoción humana. Los casos
-abiertos se conservan, pero no entrenan el ciclo. Para avanzar se exigen PnL,
-MFE, MAE, slippage, sensibilidad a gaps, validación de concentración y varias
-muestras selladas OOS/holdout. Una validación fallida no puede omitirse de una
-promoción. El contrato y el procedimiento están documentados en
-`docs/PORTFOLIO_RECURSIVE_EVIDENCE.md`.
-
-## Runner local
-
-`caliope_loop.py` implementa la parte determinista del ciclo. Conserva snapshots
-inmutables del baseline y los prompts, genera ocho paquetes de revisión, valida
-cada respuesta, contabiliza el presupuesto y controla la transición entre
-estados. En el estado actual permite `reject` y `revise`; bloquea
-`human_review` hasta que un futuro builder registre un candidato verificable.
-
-Ejecuta los comandos desde la carpeta `CALIOPE` con Python 3.11 o posterior:
-
-```powershell
-# 1. Crear un expediente y los ocho paquetes en runs/<run-id>/requests/
-python caliope_loop.py init `
-  --baseline projects/macroflow/source/MacroFlow_Backtest_v0_9_4_VALIDATION.pine `
-  --prompts projects/macroflow/evidence/AI_REVIEW_PROMPTS_v095.md `
-  --run-id mf-v095-consolidation-20261019
-
-# 2. Consultar su estado
-python caliope_loop.py status --run-id mf-v095-consolidation-20261019
-
-# 3. Ingerir una respuesta JSON; repetir una vez por cada revisor
-python caliope_loop.py ingest `
-  --run-id mf-v095-consolidation-20261019 `
-  --agent qwen `
-  --file C:/ruta/a/qwen-response.json
-
-# 4. Ingerir la decisión cuando estén recibidas las ocho respuestas
-python caliope_loop.py decision `
-  --run-id mf-v095-consolidation-20261019 `
-  --file C:/ruta/a/decision.json
-```
-
-`init` no envía solicitudes. Solo produce los archivos que un adaptador o una
-persona debe entregar a cada modelo. `ingest` tampoco acepta texto libre: el
-archivo debe cumplir el contrato del rol, conservar `run_id`, iteración y hashes,
-y no exceder los límites. `decision` reconoce `reject`, `revise` y
-`human_review`, pero esta última falla cerrada mientras no exista un candidato
-registrado por el builder. Nunca publica ni activa una estrategia.
-
-Prueba local del runner:
-
-```powershell
-python -m unittest discover -s tests -p "test_caliope_loop.py" -v
-```
-
-Para comprobar si un revisor es realmente determinista, `replay` compara una
-segunda captura con la original (ver `docs/DETERMINISM.md`).
-
-## Ocho revisores externos
-
-Cada run crea un paquete separado para estos revisores. Sus opiniones son
-evidencia; ninguna tiene autoridad para promover un cambio.
-
-| Identificador del runner | Función principal | Respuesta |
+| Paso | Qué ocurre | Qué impide |
 |---|---|---|
-| `perplexity` | Fuentes, sesiones, calendario y contexto de mercado | observación |
-| `deepseek` | Riesgo, ejecución, sizing, costes y salidas | observación |
-| `qwen` | Pine v6, causalidad, MTF, estados y compilación | observación |
-| `zai` | Red-team de regímenes adversos y sobreajuste | observación |
-| `kimi` | Walk-forward, bootstrap, selección y holdout | observación |
-| `gemini` | Seguridad, separación research/paper/live y caos | observación |
-| `meta` | Máquina de estados, concurrencia, invariantes y rollback | observación |
-| `nvidia_nemotron` | DAG, presupuestos, guardrails y cómputo apto para GPU | observación |
+| **Preguntar** | Pregunta binaria con fecha absoluta, fuente y criterio de resolución | Cambiar la pregunta después: si se reformula, es otra pregunta |
+| **Pronosticar** | Cada autor sella su probabilidad en una cadena SHA-256 | Pronosticar con el resultado ya conocido, o editar, reordenar o borrar líneas |
+| **Resolver** | Resultado `true`, `false` o `void` (con motivo), solo después del plazo y con su fuente | Resolver antes de tiempo, sin pronósticos o con fecha futura |
+| **Puntuar** | Brier y log score por autor, frente a una moneda al aire y a la tasa base, con descomposición de Murphy | Llamar "habilidad" a algo que no supera al azar, o sacar conclusiones con menos de 30 casos (avisa) |
 
-Claude/Themis puede ordenar la evidencia y preparar una síntesis, pero no figura
-como noveno voto ni puede saltarse los gates. Los verificadores deterministas
-tienen prioridad sobre cualquier consenso entre modelos.
+### 2. Aprendizaje recursivo, en dos niveles
 
-### Primera consolidación completada
+1. **`learn`**: compara la confianza que declaró cada autor con lo que pasó.
+   Con pocos datos casi no ajusta, y solo propone a partir de 30 casos por
+   tramo.
+2. **Lecciones** (`lesson-propose` → `lesson-decide` → `lesson-score`): una
+   lección cita la evidencia que la respalda, **solo una persona la adopta**,
+   y después se mide si los pronósticos que la siguieron mejoraron. Si
+   empeoran, CALIOPE propone retirarla; no la retira solo. Una lección nunca
+   se evalúa con los datos que la originaron.
 
-El run `mf-v095-consolidation-20261019` recibió las ocho observaciones y pasó a
-`evidence_merge` con 8 llamadas, 6.440 tokens de entrada, 3.330 de salida y coste
-declarado USD 0. Claude sintetizó la evidencia, conservó los desacuerdos y
-rechazó la promoción del ZIP v0.9.5. El informe público está en
-`projects/macroflow/reviews/AI_CONSOLIDATED_REVIEW_2026-10-19.md` y su índice de
-respuestas en `AI_REVIEW_EVIDENCE_INDEX_2026-10-19.json`.
+### 3. Gobierno de modelos (`caliope_loop.py`)
 
-La decisión `reject` cerró el run en `archived_rejected` y mantiene el
-artefacto en cuarentena. No hay candidata, ejecución automática ni evidencia de
-rentabilidad.
+Prepara paquetes de revisión para 8 IAs (Perplexity, DeepSeek, Qwen, Z.ai,
+Kimi, Gemini, Meta, NVIDIA), ingiere solo respuestas JSON que cumplan el
+contrato, controla presupuestos e iteraciones y bloquea cualquier promoción sin
+decisión humana. El acuerdo entre IAs no convierte una opinión en hecho.
+Detalle en [`docs/RUNNER.md`](docs/RUNNER.md).
 
-## Límites y fallo cerrado
+### 4. Protecciones para agentes de código (`CLAUDE.md`, `.claude/`)
 
-Cada manifest fija actualmente estos topes globales: dos iteraciones, dos
-candidatos, 16 respuestas, 60,000 tokens de entrada, 12,000 de salida y USD 2.00
-de coste declarado. El runner rechaza una entrada y devuelve código 2 si detecta,
-entre otros casos:
+Bloquean el push forzado, `--no-verify`, la lectura de credenciales y la
+edición de evidencia congelada o de ledgers. `tools/verify.py` ejecuta solo
+las pruebas que tocan según lo que cambió y declara lo que no se verificó.
 
-- campos requeridos ausentes o campos no permitidos;
-- `run_id`, iteración, agente o tipo de respuesta inconsistentes;
-- hashes inválidos, parche cuyo contenido no coincide con su SHA-256 o evidencia
-  repetida;
-- una segunda respuesta del mismo agente, una propuesta/parche emitido por un
-  revisor, una carrera concurrente o un presupuesto excedido;
-- una decisión anticipada, sin gates, sin razones o sin declarar que exige
-  aprobación humana.
+## Empezar
 
-La segunda iteración solo se abre mediante una decisión `revise` y dentro del
-límite. `human_review` solo podrá detener el runner cuando un futuro builder
-haya materializado y registrado el candidato que se pretende revisar.
-El runner no implementa todavía un comando de aprobación, merge, publicación,
-paper trading ni trading real. `automatic_publish` y `automatic_trading`
-permanecen en `false`.
+Python 3.11 o posterior, sin dependencias externas. Desde la carpeta `CALIOPE`:
 
-## Adaptadores pendientes
+```powershell
+git config core.hooksPath .githooks          # una vez por clon
+python tools/verify.py --all                 # todo en verde antes de usarlo
 
-Los adaptadores de navegador y API aún requieren intervención y autorización.
-CALIOPE no controla por sí solo las ventanas abiertas de Perplexity, DeepSeek,
-Qwen, Z.ai, Kimi, Gemini, Meta o NVIDIA, ni posee sus credenciales. Por ahora una
-persona o un orquestador autorizado debe:
+$L = "projects/macroflow/predictions/ledger.jsonl"
 
-1. abrir el paquete de `runs/<run-id>/requests/`;
-2. enviarlo al proveedor correspondiente;
-3. guardar únicamente el JSON contractual devuelto;
-4. ejecutarlo mediante `ingest`.
+# Sellar una predicción
+python prediction_ledger.py --ledger $L ask `
+  --text "BTCUSDT cierra una vela de 15m por debajo de 80.000 antes del 2026-10-29T00:00Z" `
+  --horizon-end 2026-10-29T00:00:00Z `
+  --source "BINANCE:BTCUSDT 15m klines" `
+  --criteria "true si algún cierre de 15m en la ventana es < 80.000; si no, false"
+python prediction_ledger.py --ledger $L forecast --question q-... --author nathan --probability 0.30 --rationale "..."
 
-Una autorización para consultar un modelo no autoriza escribir en repositorios,
-publicar, manejar secretos ni operar un broker. Los futuros adaptadores deberán
-conservar esa separación, aplicar timeouts y presupuestos y fallar cerrados ante
-un proveedor ausente, una respuesta inválida o una autorización insuficiente.
+# Tras el plazo: resolver y ver quién acierta
+python prediction_ledger.py --ledger $L resolve --question q-... --outcome false --observed datos.json
+python prediction_ledger.py --ledger $L score
+python prediction_ledger.py --ledger $L learn
+python prediction_ledger.py --ledger $L lesson-score
+```
 
-El motor heredado `archive/themis/` y los workflows describen capacidades adicionales,
-pero no deben confundirse con garantías ya implementadas por el runner local.
+Guía completa: [`docs/PREDICTION_LEDGER.md`](docs/PREDICTION_LEDGER.md).
+
+## Estado actual (2026-10-22)
+
+| Pieza | Estado |
+|---|---|
+| Registro de predicciones y lecciones | Funciona; 84 tests. **Solo 1 pronóstico puntuado**: aún no hay muestra para conclusiones |
+| Primer caso real | Predicción BTC del 2026-10-21, sellada en el commit `17235a6`: una pregunta `void` (el mínimo quedó a 57 USD del umbral) y otra `false`, que coincidió con el 25% asignado |
+| Runner de 8 IAs | Funciona, pero exige copiar y pegar en cada web; usado una vez (consolidación del 2026-10-19, decisión `reject`) |
+| MacroFlow | Primer caso de uso. La v0.9.6 vive en TradingView; en 15m dio PF 1,26 con solo 4 planes, que **no demuestran rentabilidad** |
+
+## Estructura
+
+| Ruta | Qué es |
+|---|---|
+| `prediction_ledger.py` | Registro de predicciones, puntuación, `learn` y lecciones |
+| `recursive_evidence.py` | Ledger de evidencia por operación y cartera (observación → hipótesis → candidato → validación → promoción humana) |
+| `caliope_loop.py` | Runner de revisión por modelos y `doctor` |
+| `contracts/`, `workflows/` | Esquemas JSON y contratos de revisión |
+| `projects/macroflow/` | Primer caso: Pine y evidencia congelados en `MANIFEST.sha256`; predicciones en `predictions/` |
+| `tools/verify.py` | Verificación según lo que cambió |
+| `docs/` | Diseño del registro, del runner, determinismo y evidencia |
+| `archive/` | Piezas retiradas sin borrar (motor themis, réplica Python, disciplina); ver `archive/README.md` |
+
+## Lo que falta
+
+1. **Resolución automática**: criterios legibles por máquina y un resolutor que lea los datos, sin intervención humana.
+2. **IAs y MacroFlow como autores**: que cada revisión del runner y cada señal del indicador queden como pronósticos puntuables.
+3. **Registrar sin fricción**: sellar una predicción con un solo mensaje.
+4. **Un rival base automático**, calculado con volatilidad histórica, al que haya que ganar.
+5. **Sellado de tiempo independiente** con OpenTimestamps (hoy, manual desde tu PC).
+6. **Panel visual** de calibración y lecciones.
+7. **Preguntas no binarias** (rangos, con CRPS o cuantiles).
+8. **Adaptadores** para que el runner consulte las 8 IAs sin copiar y pegar.
+
+## Verificar
+
+```powershell
+python tools/verify.py            # lo que cambió
+python tools/verify.py --all      # todo
+python caliope_loop.py doctor     # diagnóstico de solo lectura
+```
+
+`AGENTS.md` define qué comprobación exige cada tipo de cambio y cómo se
+clasifica la evidencia (observación, derivación, inferencia, desconocido).
+
+## Ideas tomadas de otros proyectos
+
+Todas reimplementadas desde cero, sin copiar código:
+[hey-research-lab/brier](https://github.com/hey-research-lab/brier) (MIT),
+[calibaudit](https://github.com/OmAcharya-avtr/calibaudit) (Apache-2.0),
+[google-research/harness2](https://github.com/google-research/harness2)
+(Apache-2.0), la [lista de Metaculus](https://www.metaculus.com/help/question-checklist/),
+[affaan-m/ECC](https://github.com/affaan-m/ECC) (MIT) y
+[morluto/rea](https://github.com/morluto/rea) (MIT).
