@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -44,6 +45,38 @@ def page_urls(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[st
     return urls
 
 
+MAX_RESPONSE_BYTES = 5_000_000
+
+
+def output_path(value: Path) -> Path:
+    """Only projects/<name>/predictions/data/<file>.json, never an existing file."""
+    out = (ROOT / value).resolve() if not value.is_absolute() else value.resolve()
+    rel = out.relative_to(ROOT).parts if ROOT in out.parents else ()
+    if len(rel) != 5 or rel[0] != "projects" or rel[2:4] != ("predictions", "data") \
+            or not rel[4].endswith(".json"):
+        raise ValueError("--out must be projects/<project>/predictions/data/<file>.json")
+    if out.exists():
+        raise ValueError(f"{out.relative_to(ROOT)} already exists: data files are never overwritten")
+    return out
+
+
+def download(url: str) -> list:
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310 (fixed https host)
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+    except (urllib.error.URLError, OSError) as exc:
+        raise ValueError(f"download failed: {exc}") from exc
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ValueError("response too large")
+    try:
+        rows = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("response is not JSON") from exc
+    if not isinstance(rows, list):
+        raise ValueError(f"unexpected response (not a list of candles): {str(rows)[:200]}")
+    return rows
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--symbol", required=True)
@@ -52,31 +85,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end", required=True)
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
-    out = args.out.resolve()
-    if ROOT not in out.parents:
-        print("--out must stay inside the CALIOPE folder", file=sys.stderr)
-        return 2
-    symbol = args.symbol.upper()
-    if not symbol.isalnum():
-        print("--symbol must be alphanumeric, e.g. BTCUSDT", file=sys.stderr)
-        return 2
     try:
+        out = output_path(args.out)
+        symbol = args.symbol.upper()
+        if not resolver.SYMBOL.fullmatch(symbol):
+            raise ValueError("--symbol must be A-Z/0-9, e.g. BTCUSDT")
         start_ms = resolver.to_ms(args.start, "--start")
         end_ms = resolver.to_ms(args.end, "--end")
-    except resolver.ResolutionError as exc:
-        print(str(exc), file=sys.stderr)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        if not start_ms < end_ms <= now_ms:
+            raise ValueError("need --start < --end <= now: future candles cannot be observed")
+        rows = []
+        for url in page_urls(symbol, args.interval, start_ms, end_ms):
+            rows.extend(download(url))
+    except (ValueError, resolver.ResolutionError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 2
-    rows = []
-    for url in page_urls(symbol, args.interval, start_ms, end_ms):
-        with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310 (fixed https host)
-            rows.extend(json.loads(response.read().decode("utf-8")))
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = {"symbol": symbol, "interval": args.interval, "start": args.start, "end": args.end,
                "source": "api.binance.com/api/v3/klines",
                "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                "klines": rows}
-    out.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-    print(json.dumps({"ok": True, "candles": len(rows), "out": str(out.relative_to(ROOT))}))
+    with out.open("x", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, separators=(",", ":")))
+    print(json.dumps({"ok": True, "candles": len(rows), "out": out.relative_to(ROOT).as_posix()}))
     return 0
 
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.13.0 — 2026-10-23
+
+Correcciones de la auditoría Thermos + anti-slop (dos revisores en contexto
+limpio; cada ataque confirmado tiene su test en `tests/test_ledger_audit.py`).
+
+- Críticos: pronóstico retroactivo con cualquier JSON como "sello" (ahora
+  exige sha256 de 64 hex y commit de 7-40 hex, sin fechas futuras);
+  pronósticos con la ventana de la regla ya abierta; U+2028/U+2029/U+0085 en
+  un texto inutilizaban el ledger (ahora se separa solo por "\n").
+- `verify` reproduce todas las compuertas con la misma función que los
+  escritores: un registro fabricado con hash correcto ya no pasa.
+- Bloqueo exclusivo y `fsync` al escribir; solo cuenta el primer pronóstico
+  de cada autor por pregunta; NaN rechazado; preguntas con regla solo se
+  resuelven con `resolve-auto` o `void`; lecciones solo dentro de su ámbito y
+  `lesson-score` sin la evidencia de la lección en el "antes"; ids de pregunta
+  con tiempos y números normalizados; booleanos no son probabilidades; el
+  marcador muestra la tasa de fallos por autor.
+- `resolver.py` 1.1: exige `fetched_at` posterior al cierre y velas cerradas
+  antes de la descarga; rechaza velas duplicadas, OHLC incoherente, filas mal
+  formadas, ventanas de más de 500.000 velas y símbolos fuera de A-Z/0-9.
+- `tools/fetch_klines.py`: solo escribe en `projects/*/predictions/data/`, no
+  sobrescribe, falla cerrado ante errores de red o respuestas inesperadas.
+- Argumentos JSON: en línea o `@ruta` dentro de CALIOPE (antes leía cualquier
+  ruta del disco). `.gitattributes`: `*.jsonl` con fin de línea LF.
+
 ## 0.12.0 — 2026-10-22
 
 - `resolver.py`: reglas legibles por máquina (`touch_first`, `touch`,

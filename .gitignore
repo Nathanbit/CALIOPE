@@ -30,3 +30,6 @@ service-account*.json
 .claude/settings.local.json
 # Informes locales (sesiones, P&L personal): no se versionan
 /state/
+
+# Bloqueo de escritura del ledger de predicciones
+*.jsonl.lock
