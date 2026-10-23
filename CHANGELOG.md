@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.0 — 2026-10-22
+
+- Integra en la nueva estructura la capa de gobierno para Claude Code del
+  PR #10 (adaptada de ECC, MIT): `CLAUDE.md`, guardas en
+  `.claude/hooks/guard.py`, revisores en `.claude/agents/`, reglas por tipo de
+  archivo, skill `caliope-verify` y `tools/verify.py`.
+- Adaptaciones: `verify.py` deja de apuntar a `labs/` y `themis/`; los cambios
+  en `archive/` ejecutan sus tests archivados y avisan de lo que no cubren.
+- La guarda impide editar a mano `projects/*/predictions/*.jsonl`: los
+  ledgers solo crecen con `prediction_ledger.py`.
+- La corrección de seguridad de `calc` (sin `eval`, límites contra `9^9^9`) se
+  aplica a `archive/themis/` con su test en `archive/tests/`.
+- `.gitignore`: `/state/`.
+- Verificación: `python tools/verify.py --all` en verde; 81 tests del núcleo OK.
+
 ## 0.9.0 — 2026-10-22
 
 - `prediction_ledger.py`: registro de predicciones binarias encadenado por

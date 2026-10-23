@@ -31,6 +31,12 @@ usuario de CALIOPE, no su núcleo.
   con sus predicciones selladas en `evidence/`).
 - `runs/`: expedientes generados por el runner; se crea al iniciar el primer run.
 - `docs/`: arquitectura, determinismo, evidencia y límites.
+- `tools/verify.py`: ejecuta solo las comprobaciones que tocan según lo que
+  cambió y declara lo que no se verificó.
+- `CLAUDE.md` y `.claude/`: guardas para agentes de código (bloquean push
+  forzado, `--no-verify`, lectura de credenciales y edición de evidencia
+  congelada o de ledgers), revisores en contexto limpio y reglas por tipo de
+  archivo.
 - `archive/`: piezas retiradas del núcleo (ver `archive/README.md`). Se
   conservan sin borrar, pero no se mantienen ni se verifican con `doctor`.
 

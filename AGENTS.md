@@ -47,7 +47,7 @@ Todo informe, revisión o salida de herramienta separa cuatro tipos:
 
 | Cambio | Comprobación |
 |---|---|
-| Cualquiera | `python caliope_loop.py doctor` |
+| Cualquiera | `python tools/verify.py` (ejecuta `doctor` y lo que corresponda según lo que cambió) |
 | Runner / ledger | `python -m unittest discover -s tests -p "test_*.py"` |
 | Predicción sellada | `python prediction_ledger.py --ledger <ledger> verify` y `doctor` en verde antes del resultado; nunca editar líneas del ledger |
 | `archive/` | No se modifica salvo para restaurar una pieza; si se restaura, recupera antes su verificación |
