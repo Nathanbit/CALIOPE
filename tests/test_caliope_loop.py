@@ -211,7 +211,9 @@ class LoopTests(unittest.TestCase):
 
     def test_request_packet_carries_contract_and_generation_requirements(self):
         manifest = self.manifest()
-        snapshot = Path(manifest["observation_contract_path"])
+        snapshot = loop._contract_path(manifest)
+        self.assertFalse(Path(manifest["observation_contract_path"]).is_absolute(),
+                         "runs must survive a moved clone")
         self.assertTrue(snapshot.is_relative_to(self.folder / "inputs"))
         self.assertEqual(loop.sha256_file(snapshot), manifest["observation_contract_hash"])
         self.assertEqual(loop.sha256_file(loop.CONTRACTS / "observation.schema.json"), manifest["observation_contract_hash"])
@@ -319,7 +321,7 @@ class LoopTests(unittest.TestCase):
             self.ingest_observation("perplexity", captured_at="2026-10-20T17:30:00")
 
     def test_tampered_contract_snapshot_blocks_ingest(self):
-        Path(self.manifest()["observation_contract_path"]).write_text("{}", encoding="utf-8")
+        loop._contract_path(self.manifest()).write_text("{}", encoding="utf-8")
         with self.assertRaises(loop.GateError):
             self.ingest_observation("perplexity")
 

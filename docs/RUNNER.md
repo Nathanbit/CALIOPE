@@ -13,7 +13,7 @@ criterios de aceptación.
 
 `workflows/macroflow-recursive-improvement.yaml` especifica el ciclo acotado de
 automejora. Perplexity, DeepSeek, Qwen, Z.ai, Kimi, Gemini, Meta y NVIDIA
-Nemotron revisan ámbitos distintos; Claude/Themis organiza la evidencia sin
+Nemotron revisan ámbitos distintos; Claude organiza la evidencia sin
 votar ni saltarse compuertas. Los contratos JSON están en `contracts/` y el
 diseño completo en `docs/RECURSIVE_MACROFLOW_LOOP.md`.
 
@@ -90,7 +90,7 @@ evidencia; ninguna tiene autoridad para promover un cambio.
 | `meta` | Máquina de estados, concurrencia, invariantes y rollback | observación |
 | `nvidia_nemotron` | DAG, presupuestos, guardrails y cómputo apto para GPU | observación |
 
-Claude/Themis puede ordenar la evidencia y preparar una síntesis, pero no figura
+Claude puede ordenar la evidencia y preparar una síntesis, pero no figura
 como noveno voto ni puede saltarse los gates. Los verificadores deterministas
 tienen prioridad sobre cualquier consenso entre modelos.
 
@@ -110,7 +110,7 @@ rentabilidad.
 ## Límites y fallo cerrado
 
 Cada manifest fija actualmente estos topes globales: dos iteraciones, dos
-candidatos, 16 respuestas, 60,000 tokens de entrada, 12,000 de salida y USD 2.00
+candidatos, 16 respuestas, 60.000 tokens de entrada, 12.000 de salida y USD 2,00
 de coste declarado. El runner rechaza una entrada y devuelve código 2 si detecta,
 entre otros casos:
 

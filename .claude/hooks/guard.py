@@ -54,7 +54,11 @@ SECRET_READ = re.compile(
     r"|\.npmrc|\.pypirc"
     r")(?=$|[\s'\";|&)>])"
 )
-READ_CMDS = re.compile(r"\b(cat|type|less|more|head|tail|bat|sed|awk|grep|rg|xxd|strings|Get-Content|gc|cp|scp|curl)\b")
+READ_CMDS = re.compile(r"\b(cat|type|less|more|head|tail|bat|sed|awk|grep|rg|xxd|strings|Get-Content|gc|cp|scp|curl"
+                       r"|python3?\s+-c|py\s+-c|node\s+-e|perl\s+-e|ruby\s+-e)\b")
+LEDGER_PATH = re.compile(r"predictions/[^\s'\"]*\.jsonl\b")
+WRITE_OPS = re.compile(r">|\btee\b|\bsed\b[^;&|]*\s-i|\bperl\b[^;&|]*\s-[a-z]*i|\btruncate\b|\brm\b|\bmv\b"
+                       r"|\bcp\b|\bdd\b|\bopen\(|\bwrite|Set-Content|Add-Content|Out-File|Remove-Item")
 
 
 def project_dir() -> Path:
@@ -67,7 +71,11 @@ def rel_path(file_path: str, root: Path) -> str:
     try:
         p = p.resolve().relative_to(root.resolve())
     except (ValueError, OSError):
-        pass
+        # Windows: the drive letter or folder case may differ between the
+        # hook payload and CLAUDE_PROJECT_DIR.
+        full, base = os.path.normcase(str(p.resolve())), os.path.normcase(str(root.resolve()))
+        if full.startswith(base + os.sep):
+            p = Path(str(p.resolve())[len(base) + 1:])
     return PurePosixPath(*p.parts).as_posix() if p.parts else file_path
 
 
@@ -92,14 +100,25 @@ def run_doctor(root: Path) -> tuple[int, str]:
     return proc.returncode, detail
 
 
-# --- modos -------------------------------------------------------------------
+# Modos. Las reglas de Bash son heurísticas: frenan errores y atajos de un
+# agente, no a alguien decidido a evadirlas. La garantía real está en
+# .githooks/pre-commit, doctor y la verificación de la cadena del ledger.
 
 def pre_bash(data: dict, root: Path) -> int:
     cmd = str(data.get("tool_input", {}).get("command", ""))
-    if re.search(r"\bgit\b[^;&|]*\bpush\b[^;&|]*(\s--force\b|\s-f\b|\s--force-with-lease\b|\s\+\S)", cmd):
+    git_cmd = re.search(r"\bgit\b", cmd) is not None
+    if git_cmd and re.search(r"\bpush\b", cmd) and re.search(
+            r"(\s--force(-with-lease)?\b|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+\S)", cmd):
         return deny("push forzado. Reescribir historia en GitHub borra evidencia; pídeselo a la persona.")
-    if re.search(r"\bgit\b[^;&|]*\b(commit|push|merge|rebase)\b[^;&|]*(--no-verify|\s-n\b)", cmd):
+    if git_cmd and ("--no-verify" in cmd or re.search(
+            r"\b(commit|merge)\b.*\s-(?!-)[a-zA-Z]*n[a-zA-Z]*\b", cmd)):
         return deny("--no-verify salta el escaneo de secretos de .githooks/pre-commit.")
+    if git_cmd and re.search(r"core\.hookspath", cmd, re.IGNORECASE) and not re.search(
+            r"\bconfig\s+core\.hookspath\s+\.githooks\b", cmd, re.IGNORECASE):
+        return deny("cambiar core.hooksPath desactiva el escaneo de secretos (SECURITY.md).")
+    if LEDGER_PATH.search(cmd) and WRITE_OPS.search(cmd) and "prediction_ledger.py" not in cmd:
+        return deny("escritura directa en un ledger de predicciones: solo se añade con "
+                    "prediction_ledger.py (editarlo rompe la cadena).")
     if READ_CMDS.search(cmd) and SECRET_READ.search(cmd):
         return deny("comando que lee o copia un archivo de credenciales (AGENTS.md: nunca leas credenciales).")
     if re.search(r"\bgit\b[^;&|]*\bcommit\b", cmd):

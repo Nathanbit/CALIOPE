@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.13.1 — 2026-10-23
+
+Segunda parte de la auditoría Thermos + anti-slop.
+
+- Escáner de secretos y `doctor` fallan cerrados: un archivo de más de 2 MB
+  se reporta como `too_large_to_scan` en vez de saltarse; un `git show`
+  fallido detiene el escaneo; sin git, `doctor` marca `fail` (antes `warn`).
+- Runner: `ingest_decision` valida todo antes de escribir (ya no deja un
+  `decision.json` huérfano si se supera el límite de candidatos); la ruta del
+  contrato de observación se guarda relativa al expediente, así un run
+  sobrevive a otro clon o sistema operativo.
+- Guarda: bloquea `git push -uf`, `--no-verify` aunque el mensaje tenga `;`,
+  `git -c core.hooksPath=...`, escrituras al ledger desde la shell y lectura
+  de credenciales con `python -c`/`node -e`; tolera diferencias de mayúsculas
+  en rutas de Windows. Documentada como heurística: la garantía está en el
+  pre-commit, `doctor` y la cadena.
+- anti-slop: sin banners decorativos en el código; README sin cifras que
+  caducan ni la promesa "no se pueden manipular"; referencias a `audit/`,
+  `tools/discipline/` y "Themis" actualizadas; la regla de dataclasses
+  congeladas se reemplaza por la práctica real (dicts validados + hash).
+- Tests: `encoding="utf-8"` explícito, reloj fijo en el ledger, sin import
+  sin usar. 117 tests OK.
+
 ## 0.13.0 — 2026-10-23
 
 Correcciones de la auditoría Thermos + anti-slop (dos revisores en contexto

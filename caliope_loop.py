@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -217,7 +218,15 @@ def _observation_schema(manifest: dict | None) -> dict:
     """1.1 runs validate against their own immutable contract snapshot."""
     if _observation_contract(manifest) == "1.0":
         return read_json(CONTRACTS / OBSERVATION_CONTRACTS["1.0"])
-    return read_json(Path(manifest["observation_contract_path"]))
+    return read_json(_contract_path(manifest))
+
+
+def _contract_path(manifest: dict) -> Path:
+    """Contract snapshots are stored relative to the run folder so a run stays
+    valid when the repository moves (another clone, Windows/Linux). Absolute
+    paths from older runs are still honoured."""
+    raw = Path(manifest["observation_contract_path"])
+    return raw if raw.is_absolute() else run_path(manifest["run_id"]) / raw
 
 
 def _optional_number(value: Any, name: str, minimum: float, maximum: float) -> None:
@@ -531,7 +540,7 @@ def _validate_observation_contract(manifest: dict, run_id: str, input_root: Path
         raise GateError("manifest generation requirements were modified")
     _hex(manifest["observation_contract_hash"], "manifest observation_contract_hash")
     try:
-        contract = Path(manifest["observation_contract_path"]).resolve(strict=True)
+        contract = _contract_path(manifest).resolve(strict=True)
         if not contract.is_relative_to(input_root):
             raise GateError("observation contract must point to the immutable run snapshot")
         if sha256_file(contract) != manifest["observation_contract_hash"]:
@@ -575,7 +584,7 @@ def _write_requests(folder: Path, manifest: dict) -> None:
             packet["response_contract_hash"] = manifest["observation_contract_hash"]
             packet["generation_requirements"] = {
                 "contract_hash": manifest["observation_contract_hash"],
-                "response_schema": read_json(Path(manifest["observation_contract_path"])),
+                "response_schema": read_json(_contract_path(manifest)),
                 "structured_output_preferred": "json_schema",
                 **manifest["generation_requirements"],
                 "policy": manifest["observation_policy"],
@@ -635,7 +644,7 @@ def init_run(baseline: Path, prompt_file: Path, run_id: str | None = None) -> Pa
         "automatic_publish": False,
         "automatic_trading": False,
         "observation_contract": CURRENT_OBSERVATION_CONTRACT,
-        "observation_contract_path": str(contract_snapshot.resolve()),
+        "observation_contract_path": contract_snapshot.resolve().relative_to(folder.resolve()).as_posix(),
         "observation_contract_hash": sha256_bytes(contract_bytes),
         "observation_policy": dict(OBSERVATION_POLICY),
         "generation_requirements": _generation_requirements(run_id),
@@ -702,13 +711,11 @@ def ingest_review(run_id: str, agent: str, response_file: Path) -> Path:
         return out
 
 
-# ---------------------------------------------------------------------------
 # Replay: verifica una afirmación de determinismo repitiendo la captura.
 # Idea de DeepInfer (muestreo determinista + inferencia batch-invariant): si el
 # motor promete salidas idénticas para la misma entrada y semilla, una segunda
 # captura debe tener el mismo contenido. El replay no sustituye ni duplica la
 # respuesta original: se guarda aparte, consume presupuesto y no cambia la etapa.
-# ---------------------------------------------------------------------------
 REPLAY_VERDICTS = {
     (True, "batch_invariant"): "verified_deterministic",
     (True, "seeded_best_effort"): "reproduced",
@@ -771,9 +778,8 @@ def ingest_decision(run_id: str, decision_file: Path) -> Path:
         validate_decision(value, manifest)
         digest = sha256_bytes(canonical_bytes(value))
         archive = folder / "decisions" / f"iteration-{manifest['iteration']}-{digest[:12].lower()}.json"
-        atomic_json(archive, value)
         out = folder / "decision.json"
-        atomic_json(out, value)
+        manifest = json.loads(json.dumps(manifest))  # every gate runs before any write
         manifest["decision"] = value["decision"]
         manifest["decision_hash"] = digest
         candidate_hash = value["candidate_hash"].upper()
@@ -797,6 +803,8 @@ def ingest_decision(run_id: str, decision_file: Path) -> Path:
             manifest["stage"] = "human_review"
         else:
             manifest["stage"] = "archived_rejected"
+        atomic_json(archive, value)
+        atomic_json(out, value)
         atomic_json(folder / "run_manifest.json", manifest)
         return out
 
@@ -806,10 +814,8 @@ def print_status(run_id: str) -> None:
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
 
 
-# ---------------------------------------------------------------------------
 # doctor: diagnóstico de solo lectura (patrón "doctor" de REA). No modifica
 # nada salvo comprobar que runs/ es escribible. Cualquier "fail" devuelve 2.
-# ---------------------------------------------------------------------------
 UNSAFE_FLAG = re.compile(r"^\s*(automatic_publish|automatic_trading|live_execution)\s*:\s*true\b",
                          re.IGNORECASE | re.MULTILINE)
 
@@ -851,11 +857,9 @@ def _check_manifest(manifest: Path) -> list[dict]:
     return out
 
 
-# ---------------------------------------------------------------------------
 # Seguridad de la cadena de suministro (respuesta a GhostAction, oct-2026).
 # CALIOPE no usa CI: cualquier workflow de GitHub Actions debe estar aprobado
 # por hash. El escáner nunca imprime el valor de un secreto, solo dónde está.
-# ---------------------------------------------------------------------------
 SECRET_PATTERNS = {
     "aws_access_key": re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
     "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
@@ -881,8 +885,9 @@ ALLOWED_WORKFLOWS = Path("security") / "allowed_workflows.sha256"
 MAX_SCAN_BYTES = 2_000_000
 
 
-def _git_files(staged: bool) -> list[tuple[str, bytes]]:
-    import subprocess
+def _git_files(staged: bool) -> list[tuple[str, bytes | None]]:
+    """(name, content) for tracked or staged files. Content is None when the
+    file is too large to scan: callers must report it, never skip it."""
     cmd = (["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"] if staged
            else ["git", "ls-files", "-z"])
     names = subprocess.run(cmd, cwd=ROOT, capture_output=True, check=True).stdout.split(b"\0")
@@ -892,11 +897,14 @@ def _git_files(staged: bool) -> list[tuple[str, bytes]]:
             continue
         name = raw.decode("utf-8", "replace")
         if staged:
-            data = subprocess.run(["git", "show", f":{name}"], cwd=ROOT, capture_output=True).stdout
+            data = subprocess.run(["git", "show", f":{name}"], cwd=ROOT, capture_output=True,
+                                  check=True).stdout
         else:
             path = ROOT / name
-            data = path.read_bytes() if path.is_file() and path.stat().st_size <= MAX_SCAN_BYTES else b""
-        out.append((name, data[:MAX_SCAN_BYTES]))
+            if not path.is_file():
+                continue  # deleted in the working tree; the staged scan covers commits
+            data = path.read_bytes() if path.stat().st_size <= MAX_SCAN_BYTES else None
+        out.append((name, None if data is None or len(data) > MAX_SCAN_BYTES else data))
     return out
 
 
@@ -918,6 +926,9 @@ def scan_text(name: str, data: bytes) -> list[dict]:
 def scan_secrets(staged: bool = False) -> list[dict]:
     findings: list[dict] = []
     for name, data in _git_files(staged):
+        if data is None:
+            findings.append({"file": name, "line": 0, "kind": "too_large_to_scan"})
+            continue
         findings.extend(scan_text(name, data))
     return findings
 
@@ -997,8 +1008,9 @@ def doctor() -> dict:
                        "detail": f"{len(found)} hallazgo(s): " + ", ".join(
                            f"{f['file']}:{f['line']} ({f['kind']})" for f in found[:10])
                        if found else "sin secretos ni marcadores de GhostAction en archivos versionados"})
-    except Exception as exc:  # sin git: no se puede afirmar que esté limpio
-        checks.append({"check": "secret_scan", "status": "warn", "detail": f"no ejecutado: {exc}"[:200]})
+    except (OSError, subprocess.CalledProcessError) as exc:
+        # Sin git no se puede afirmar que esté limpio: falla cerrado.
+        checks.append({"check": "secret_scan", "status": "fail", "detail": f"no ejecutado: {exc}"[:200]})
     try:
         RUNS.mkdir(exist_ok=True)
         ok_runs = os.access(RUNS, os.W_OK)

@@ -14,6 +14,7 @@ import prediction_ledger as pl  # noqa: E402
 
 H = "2026-10-22T00:15:00Z"
 FAR = datetime(2099, 1, 3, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 23, tzinfo=timezone.utc)
 OBS = {"source": "test", "low": 1.0}
 
 
@@ -21,8 +22,11 @@ class LedgerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "ledger.jsonl"
+        self.clock = mock.patch.object(pl, "now_utc", return_value=NOW)
+        self.clock.start()
 
     def tearDown(self):
+        self.clock.stop()
         self.tmp.cleanup()
 
     def _question(self, text="Q", horizon=H, base_rate=None):
@@ -38,13 +42,13 @@ class LedgerTest(unittest.TestCase):
         self._sealed_forecast(qid, 0.55)
         pl.resolve(self.path, qid, "false", OBS, resolved_at="2026-10-22T00:21:00Z")
         pl.verify(pl.load(self.path))
-        lines = self.path.read_text().splitlines()
+        lines = self.path.read_text(encoding="utf-8").splitlines()
         tampered = json.loads(lines[1])
         tampered["probability"] = 0.9
-        self.path.write_text("\n".join([lines[0], json.dumps(tampered), lines[2]]) + "\n")
+        self.path.write_text("\n".join([lines[0], json.dumps(tampered), lines[2]]) + "\n", encoding="utf-8")
         with self.assertRaisesRegex(pl.GateError, "line 2"):
             pl.verify(pl.load(self.path))
-        self.path.write_text("\n".join([lines[0], lines[2]]) + "\n")
+        self.path.write_text("\n".join([lines[0], lines[2]]) + "\n", encoding="utf-8")
         with self.assertRaisesRegex(pl.GateError, "chain broken"):
             pl.verify(pl.load(self.path))
 
@@ -127,7 +131,7 @@ class LedgerTest(unittest.TestCase):
             self._sealed_forecast(qid, 0.8)
             pl.resolve(self.path, qid, "true" if i < 6 else "false", OBS,
                        resolved_at="2026-10-22T00:21:00Z")
-        before = self.path.read_text()
+        before = self.path.read_text(encoding="utf-8")
         result = pl.learn(pl.load(self.path), min_n=30)
         self.assertTrue(result["observation_only"])
         self.assertFalse(result["automatic_edit"])
@@ -138,7 +142,7 @@ class LedgerTest(unittest.TestCase):
         self.assertTrue(ready["ready"])
         # 6 hits of 12 at 0.8 stated, shrunk toward 0.8 with 20 pseudo-observations
         self.assertAlmostEqual(ready["shrunk_freq"], round((6 + 20 * 0.8) / 32, 4))
-        self.assertEqual(self.path.read_text(), before, "learn must never write the ledger")
+        self.assertEqual(self.path.read_text(encoding="utf-8"), before, "learn must never write the ledger")
 
     def test_doctor_fails_on_tampered_ledger(self):
         import caliope_loop
@@ -146,16 +150,13 @@ class LedgerTest(unittest.TestCase):
         ledger = project / "ledger.jsonl"
         qid = pl.ask(ledger, "Q", "2099-01-01T00:00:00Z", "s", "c")["question_id"]
         pl.forecast(ledger, qid, "a", 0.5, "r")
-        original = caliope_loop.ROOT
-        caliope_loop.ROOT = Path(self.tmp.name)
-        try:
+        with mock.patch.object(caliope_loop, "ROOT", Path(self.tmp.name)):
             self.assertEqual([c["status"] for c in caliope_loop._check_prediction_ledgers()], ["pass"])
-            ledger.write_text(ledger.read_text().replace('"probability":0.5', '"probability":0.9'))
+            ledger.write_text(ledger.read_text(encoding="utf-8").replace('"probability":0.5', '"probability":0.9'),
+                              encoding="utf-8")
             self.assertEqual([c["status"] for c in caliope_loop._check_prediction_ledgers()], ["fail"])
-        finally:
-            caliope_loop.ROOT = original
 
-    # ── Lessons (second recursion level) ────────────────────────────────────
+    # Lessons (second recursion level)
     FUT = "2099-01-01T00:00:00Z"
 
     def _resolved_question(self, i, p=0.8, outcome="true", author="claude"):

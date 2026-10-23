@@ -6,7 +6,7 @@
 
 | Ruta | Qué es |
 |---|---|
-| `prediction_ledger.py` | Registro de predicciones encadenado: `ask`, `forecast`, `resolve`, `verify`, `score`, `learn`, `lesson-propose`, `lesson-decide`, `lesson-score` |
+| `prediction_ledger.py` | Registro de predicciones encadenado: `ask`, `forecast`, `resolve`, `resolve-auto`, `verify`, `score`, `learn`, `lesson-propose`, `lesson-decide`, `lesson-score` |
 | `resolver.py` | Reglas de resolución y velas: evalúa sin ver pronósticos; `tools/fetch_klines.py` descarga datos públicos |
 | `recursive_evidence.py` | Ledger encadenado por SHA-256 de operaciones y cartera |
 | `caliope_loop.py` | Runner fail-closed: `init`, `ingest`, `decision`, `replay`, `status`, `doctor`, `scan-secrets` |

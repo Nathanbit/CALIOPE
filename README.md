@@ -5,7 +5,8 @@
 Hoy cualquiera hace predicciones —una persona, un "experto", un modelo de IA,
 un indicador de trading— y casi nadie las mide. CALIOPE las **sella antes del
 resultado**, las **resuelve con datos observados** y **puntúa a cada autor**
-con reglas que no se pueden manipular. Con el tiempo responde con números a
+con reglas que detectan las trampas habituales (ver sus límites en
+[`docs/PREDICTION_LEDGER.md`](docs/PREDICTION_LEDGER.md)). Con el tiempo responde con números a
 la pregunta: *¿a quién conviene creer, y cuánto?*
 
 Además, **aprende de sí mismo**: convierte su historial en lecciones, una
@@ -32,7 +33,7 @@ de verdad mejoraron los pronósticos.
 1. **`learn`**: compara la confianza que declaró cada autor con lo que pasó.
    Con pocos datos casi no ajusta, y solo propone a partir de 30 casos por
    tramo.
-2. **Lecciones** (`lesson-propose` → `lesson-decide` → `lesson-score`): una
+1. **Lecciones** (`lesson-propose` → `lesson-decide` → `lesson-score`): una
    lección cita la evidencia que la respalda, **solo una persona la adopta**,
    y después se mide si los pronósticos que la siguieron mejoraron. Si
    empeoran, CALIOPE propone retirarla; no la retira solo. Una lección nunca
@@ -79,11 +80,11 @@ python prediction_ledger.py --ledger $L lesson-score
 
 Guía completa: [`docs/PREDICTION_LEDGER.md`](docs/PREDICTION_LEDGER.md).
 
-## Estado actual (2026-10-22)
+## Estado actual (2026-10-23)
 
 | Pieza | Estado |
 |---|---|
-| Registro de predicciones y lecciones | Funciona; 84 tests. **Solo 1 pronóstico puntuado**: aún no hay muestra para conclusiones |
+| Registro de predicciones y lecciones | Funciona, auditado (Thermos + anti-slop, 2026-10-23). **Solo 1 pronóstico puntuado**: aún no hay muestra para conclusiones |
 | Primer caso real | Predicción BTC del 2026-10-21, sellada en el commit `17235a6`: una pregunta `void` (el mínimo quedó a 57 USD del umbral) y otra `false`, que coincidió con el 25% asignado |
 | Runner de 8 IAs | Funciona, pero exige copiar y pegar en cada web; usado una vez (consolidación del 2026-10-19, decisión `reject`) |
 | MacroFlow | Primer caso de uso. La v0.9.6 vive en TradingView; en 15m dio PF 1,26 con solo 4 planes, que **no demuestran rentabilidad** |
@@ -93,6 +94,7 @@ Guía completa: [`docs/PREDICTION_LEDGER.md`](docs/PREDICTION_LEDGER.md).
 | Ruta | Qué es |
 |---|---|
 | `prediction_ledger.py` | Registro de predicciones, puntuación, `learn` y lecciones |
+| `resolver.py` | Resolución automática con reglas de máquina sobre velas; `tools/fetch_klines.py` descarga datos públicos |
 | `recursive_evidence.py` | Ledger de evidencia por operación y cartera (observación → hipótesis → candidato → validación → promoción humana) |
 | `caliope_loop.py` | Runner de revisión por modelos y `doctor` |
 | `contracts/`, `workflows/` | Esquemas JSON y contratos de revisión |
@@ -103,14 +105,13 @@ Guía completa: [`docs/PREDICTION_LEDGER.md`](docs/PREDICTION_LEDGER.md).
 
 ## Lo que falta
 
-1. ~~**Resolución automática**~~ ✅ Hecho: reglas legibles por máquina y `resolve-auto` sobre velas descargadas con `tools/fetch_klines.py`.
-2. **IAs y MacroFlow como autores**: que cada revisión del runner y cada señal del indicador queden como pronósticos puntuables.
-3. **Registrar sin fricción**: sellar una predicción con un solo mensaje.
-4. **Un rival base automático**, calculado con volatilidad histórica, al que haya que ganar.
-5. **Sellado de tiempo independiente** con OpenTimestamps (hoy, manual desde tu PC).
-6. **Panel visual** de calibración y lecciones.
-7. **Preguntas no binarias** (rangos, con CRPS o cuantiles).
-8. **Adaptadores** para que el runner consulte las 8 IAs sin copiar y pegar.
+1. **IAs y MacroFlow como autores**: que cada revisión del runner y cada señal del indicador queden como pronósticos puntuables.
+2. **Registrar sin fricción**: sellar una predicción con un solo mensaje.
+3. **Un rival base automático**, calculado con volatilidad histórica, al que haya que ganar.
+4. **Sellado de tiempo independiente** con OpenTimestamps (hoy, manual desde tu PC).
+5. **Panel visual** de calibración y lecciones.
+6. **Preguntas no binarias** (rangos, con CRPS o cuantiles).
+7. **Adaptadores** para que el runner consulte las 8 IAs sin copiar y pegar.
 
 ## Verificar
 

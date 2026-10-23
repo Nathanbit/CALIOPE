@@ -36,9 +36,10 @@ Todo informe, revisión o salida de herramienta separa cuatro tipos:
 ## Propiedad de cada interpretación
 
 - Cada formato tiene un único dueño que lo parsea; los consumidores usan sus
-  hechos ya parseados en vez de reinterpretar el archivo bruto (por ejemplo,
-  `audit/tradelog.py` para exports de TradingView,
-  `audit/discretionary.py` para historiales de SimpleFX).
+  hechos ya parseados en vez de reinterpretar el archivo bruto:
+  `prediction_ledger.py` para el ledger de predicciones, `resolver.py` para
+  reglas y velas, `recursive_evidence.py` para el ledger de operaciones y
+  `caliope_loop.py` para los expedientes del runner.
 - Al corregir un error, arregla la representación que lo produce antes de
   añadir parches aguas abajo, y elimina el código que quede obsoleto.
 - Los fallos esperados se modelan explícitamente y fallan cerrados.

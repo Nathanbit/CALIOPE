@@ -50,21 +50,38 @@ class WorkflowGateTests(unittest.TestCase):
     def test_unapproved_workflow_fails(self):
         wf = self.root / ".github" / "workflows"
         wf.mkdir(parents=True)
-        (wf / "security-audit.yml").write_text("on: push\n")
+        (wf / "security-audit.yml").write_text("on: push\n", encoding="utf-8")
         self.assertEqual(cl._check_workflows()[0]["status"], "fail")
 
     def test_approved_by_hash_passes_and_tamper_fails(self):
         wf = self.root / ".github" / "workflows"
         wf.mkdir(parents=True)
         f = wf / "ok.yml"
-        f.write_text("on: workflow_dispatch\n")
+        f.write_text("on: workflow_dispatch\n", encoding="utf-8")
         (self.root / "security").mkdir()
         allow = self.root / "security" / "allowed_workflows.sha256"
-        allow.write_text(f"{cl.sha256_file(f).lower()}  .github/workflows/ok.yml\n")
+        allow.write_text(f"{cl.sha256_file(f).lower()}  .github/workflows/ok.yml\n", encoding="utf-8")
         self.assertEqual(cl._check_workflows()[0]["status"], "pass")
-        f.write_text("on: push\nrun: curl evil\n")
+        f.write_text("on: push\nrun: curl evil\n", encoding="utf-8")
         self.assertEqual(cl._check_workflows()[0]["status"], "fail")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FailClosedScanTests(unittest.TestCase):
+    """Audit 2026-10-23: the scan must never skip a file in silence."""
+
+    def test_file_too_large_is_reported_not_skipped(self):
+        with mock.patch.object(cl, "_git_files", return_value=[("big.json", None)]):
+            found = cl.scan_secrets()
+        self.assertEqual(found, [{"file": "big.json", "line": 0, "kind": "too_large_to_scan"}])
+
+    def test_doctor_fails_when_the_scan_cannot_run(self):
+        error = cl.subprocess.CalledProcessError(128, ["git", "show"])
+        with mock.patch.object(cl, "scan_secrets", side_effect=error):
+            report = cl.doctor()
+        scan = next(c for c in report["checks"] if c["check"] == "secret_scan")
+        self.assertEqual(scan["status"], "fail")
+        self.assertFalse(report["healthy"])
