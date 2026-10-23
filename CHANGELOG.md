@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.1 — 2026-10-22
+
+- `README.md` reescrito: qué es CALIOPE, sus cuatro piezas, cómo empezar,
+  estado actual con sus límites, estructura y lo que falta.
+- El detalle del runner de 8 IAs pasa, sin cambios, a `docs/RUNNER.md`.
+- La skill `caliope-verify` deja de mencionar el laboratorio archivado.
+
 ## 0.11.0 — 2026-10-22
 
 - Segundo nivel de recursividad en `prediction_ledger.py`, inspirado en el
