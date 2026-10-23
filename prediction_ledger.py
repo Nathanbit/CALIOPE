@@ -13,9 +13,13 @@ Design ideas adapted (no code copied) from:
   small-sample warnings.
 - Metaculus question checklist: absolute dates, explicit resolution source
   and criteria.
+- google-research/harness2 (Apache-2.0): a persistent memory of
+  evidence-supported lessons that guides future work and is itself judged
+  ("improving the improver").
 
-Recursive learning (``learn``) turns past calibration into a *proposal* for
-future forecasts. It never edits the ledger or any forecast: models propose,
+Two recursion levels: ``learn`` turns past calibration into proposals, and
+lessons (``lesson-propose``/``lesson-decide``/``lesson-score``) record what a
+person adopted and whether following it improved later forecasts. It never edits the ledger or any forecast: models propose,
 deterministic gates verify, a person decides.
 
 Standard library only. Exit code 2 means a gate rejected the input.
@@ -33,6 +37,7 @@ from pathlib import Path
 GENESIS = "0" * 64
 OUTCOMES = ("true", "false", "void")
 FAILURE = "failure"
+LESSON_DECISIONS = ("adopt", "reject", "retire")
 
 
 class GateError(Exception):
@@ -59,8 +64,16 @@ def parse_time(value: str, field: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def now_utc() -> datetime:
+    """Single clock for every gate (patched in tests)."""
+    return datetime.now(timezone.utc)
+
+
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return now_utc().isoformat().replace("+00:00", "Z")
+
+
+CLOCK_SKEW_SECONDS = 300
 
 
 def question_id(text: str, horizon_end: str, source: str, criteria: str) -> str:
@@ -146,9 +159,11 @@ def ask(path: Path, text: str, horizon_end: str, source: str, criteria: str,
 
 
 def forecast(path: Path, qid: str, author: str, probability: float | None, rationale: str,
-             made_at: str | None = None, sealed_evidence: dict | None = None) -> dict:
+             made_at: str | None = None, sealed_evidence: dict | None = None,
+             lessons_applied: list[str] | None = None) -> dict:
     """Seal a forecast. ``made_at`` in the past requires ``sealed_evidence``
-    (hash of an earlier sealed file and the commit that published it)."""
+    (hash of an earlier sealed file and the commit that published it).
+    ``lessons_applied`` may only cite lessons a person has adopted."""
     records = load(path)
     verify(records)
     questions, _, resolutions = index(records)
@@ -164,6 +179,13 @@ def forecast(path: Path, qid: str, author: str, probability: float | None, ratio
         raise GateError("backdated made_at requires sealed_evidence (sha256 + commit)")
     if not author or not author.strip():
         raise GateError("author is required")
+    applied = sorted(set(lessons_applied or []))
+    lessons = lessons_index(records)
+    for lid in applied:
+        if lid not in lessons or lesson_status(lessons[lid]) != "adopted":
+            raise GateError(f"{lid} is not an adopted lesson")
+        if made_at is not None:
+            raise GateError("backdated forecasts cannot cite lessons")
     status = "ok"
     if probability is None or not isinstance(probability, (int, float)) \
             or not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
@@ -171,7 +193,8 @@ def forecast(path: Path, qid: str, author: str, probability: float | None, ratio
     return append(path, records, {
         "type": "forecast", "question_id": qid, "author": author.strip(),
         "probability": probability, "status": status, "rationale": rationale.strip(),
-        "made_at": made, "sealed_evidence": sealed_evidence, "recorded_at": utc_now_iso(),
+        "made_at": made, "sealed_evidence": sealed_evidence, "lessons_applied": applied,
+        "recorded_at": utc_now_iso(),
     })
 
 
@@ -191,8 +214,11 @@ def resolve(path: Path, qid: str, outcome: str, observed: dict, resolved_at: str
     if outcome == "void" and not (void_reason and void_reason.strip()):
         raise GateError("void outcomes need a reason taken from the resolution criteria")
     when = resolved_at or utc_now_iso()
-    if parse_time(when, "resolved_at") < parse_time(questions[qid]["horizon_end"], "horizon_end"):
+    resolved_dt = parse_time(when, "resolved_at")
+    if resolved_dt < parse_time(questions[qid]["horizon_end"], "horizon_end"):
         raise GateError("cannot resolve before horizon_end")
+    if (resolved_dt - now_utc()).total_seconds() > CLOCK_SKEW_SECONDS:
+        raise GateError("resolved_at is in the future: an outcome cannot be observed yet")
     if not isinstance(observed, dict) or not observed.get("source"):
         raise GateError("observed data must be an object with its source")
     return append(path, records, {
@@ -224,7 +250,8 @@ def scored_pairs(records: list[dict]) -> tuple[list[dict], dict]:
                 counts["failures"] += 1
                 continue
             pairs.append({"author": item["author"], "p": float(item["probability"]), "y": y,
-                          "base_rate": questions[qid].get("base_rate")})
+                          "base_rate": questions[qid].get("base_rate"), "question_id": qid,
+                          "seq": item["seq"], "lessons": item.get("lessons_applied") or []})
     return pairs, counts
 
 
@@ -313,6 +340,7 @@ def learn(records: list[dict], min_n: int = 30, prior_strength: float = 20.0,
             shrunk = (hits + prior_strength * stated) / (n + prior_strength)
             ready = n >= min_n
             lessons.append({
+                "evidence_questions": sorted({x["question_id"] for x in group}),
                 "author": author, "bin": f"{key / bins:.1f}-{(key + 1) / bins:.1f}", "n": n,
                 "stated_mean": round(stated, 4), "observed_freq": round(hits / n, 4),
                 "shrunk_freq": round(shrunk, 4), "ready": ready,
@@ -322,6 +350,127 @@ def learn(records: list[dict], min_n: int = 30, prior_strength: float = 20.0,
     return {"evidence_type": "inference", "observation_only": True, "automatic_edit": False,
             "requires_human_decision": True, "min_n": min_n, "prior_strength": prior_strength,
             "counts": counts, "lessons": lessons}
+
+
+# ── Lessons: the improvement memory (second recursion level) ────────────────
+#
+# Idea adapted from google-research/harness2 (Apache-2.0): an "improvement
+# harness" of evidence-supported lessons that guides future work, and is
+# itself judged by results. Unlike harness2, nothing is adopted without a
+# recorded human decision, and a lesson is only scored on forecasts made
+# after its adoption (never on the evidence that produced it).
+
+def lesson_id(text: str, scope: str) -> str:
+    return "l-" + sha256_text(canonical({"text": text.strip(), "scope": scope.strip()}))[:16]
+
+
+def lessons_index(records: list[dict]) -> dict:
+    lessons: dict[str, dict] = {}
+    for record in records:
+        if record["type"] == "lesson":
+            lessons[record["lesson_id"]] = {"lesson": record, "decisions": []}
+        elif record["type"] == "lesson_decision":
+            lessons[record["lesson_id"]]["decisions"].append(record)
+    return lessons
+
+
+def lesson_status(entry: dict) -> str:
+    if not entry["decisions"]:
+        return "proposed"
+    return {"adopt": "adopted", "reject": "rejected", "retire": "retired"}[
+        entry["decisions"][-1]["decision"]]
+
+
+def propose_lesson(path: Path, text: str, scope: str, evidence_questions: list[str],
+                   proposed_by: str) -> dict:
+    """A lesson must cite resolved questions; ``scope`` is an author or ``*``."""
+    records = load(path)
+    verify(records)
+    if not text or not text.strip():
+        raise GateError("lesson text is required")
+    if not scope or not scope.strip():
+        raise GateError("scope is required (an author name or '*')")
+    if not proposed_by or not proposed_by.strip():
+        raise GateError("proposed_by is required")
+    evidence = sorted(set(evidence_questions or []))
+    if not evidence:
+        raise GateError("a lesson needs evidence: cite resolved questions")
+    questions, _, resolutions = index(records)
+    for qid in evidence:
+        if qid not in questions:
+            raise GateError(f"unknown question {qid}")
+        if qid not in resolutions:
+            raise GateError(f"{qid} is not resolved: lessons only come from outcomes")
+    lid = lesson_id(text, scope)
+    if lid in lessons_index(records):
+        raise GateError(f"{lid} already exists")
+    return append(path, records, {
+        "type": "lesson", "lesson_id": lid, "text": text.strip(), "scope": scope.strip(),
+        "evidence_questions": evidence, "proposed_by": proposed_by.strip(),
+        "evidence_type": "inference", "recorded_at": utc_now_iso(),
+    })
+
+
+def decide_lesson(path: Path, lid: str, decision: str, decided_by: str, reason: str) -> dict:
+    """Human gate: proposed -> adopt|reject; adopted -> retire."""
+    records = load(path)
+    verify(records)
+    lessons = lessons_index(records)
+    if lid not in lessons:
+        raise GateError(f"unknown lesson {lid}")
+    if decision not in LESSON_DECISIONS:
+        raise GateError(f"decision must be one of {LESSON_DECISIONS}")
+    if not decided_by or not decided_by.strip():
+        raise GateError("decided_by is required: a person decides")
+    if not reason or not reason.strip():
+        raise GateError("a decision needs a reason")
+    status = lesson_status(lessons[lid])
+    allowed = {"proposed": ("adopt", "reject"), "adopted": ("retire",)}.get(status, ())
+    if decision not in allowed:
+        raise GateError(f"cannot {decision} a lesson that is {status}")
+    return append(path, records, {
+        "type": "lesson_decision", "lesson_id": lid, "decision": decision,
+        "decided_by": decided_by.strip(), "reason": reason.strip(), "human_decision": True,
+        "decided_at": utc_now_iso(),
+    })
+
+
+def score_lessons(records: list[dict], min_n: int = 30, margin: float = 0.01) -> dict:
+    """Second recursion level: does following a lesson improve later forecasts?
+
+    ``before``: scored forecasts in the lesson's scope sealed before adoption.
+    ``after``: scored forecasts that cite the lesson (necessarily sealed after
+    adoption). Verdicts need ``min_n`` on both sides; the output only proposes."""
+    pairs, _ = scored_pairs(records)
+    report = []
+    for lid, entry in lessons_index(records).items():
+        adoption = next((d for d in entry["decisions"] if d["decision"] == "adopt"), None)
+        lesson = entry["lesson"]
+        row = {"lesson_id": lid, "text": lesson["text"], "scope": lesson["scope"],
+               "status": lesson_status(entry)}
+        if adoption is None:
+            report.append(dict(row, verdict="not_adopted"))
+            continue
+        in_scope = [x for x in pairs if lesson["scope"] in ("*", x["author"])]
+        before = [x for x in in_scope if x["seq"] < adoption["seq"]]
+        after = [x for x in in_scope if lid in x["lessons"]]
+        b_before, b_after = brier(before), brier(after)
+        delta = None if b_before is None or b_after is None else b_after - b_before
+        if len(before) < min_n or len(after) < min_n:
+            verdict = "insufficient"
+        elif delta < -margin:
+            verdict = "helps"
+        elif delta > margin:
+            verdict = "hurts"
+        else:
+            verdict = "neutral"
+        report.append(dict(row, n_before=len(before), n_after=len(after), brier_before=b_before,
+                           brier_after=b_after, delta=delta, verdict=verdict,
+                           proposal=("propose retiring it: forecasts got worse"
+                                     if verdict == "hurts" else None)))
+    return {"evidence_type": "inference", "observation_only": True,
+            "requires_human_decision": True, "min_n": min_n, "margin": margin,
+            "lessons": report}
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -359,6 +508,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rationale", default="")
     p.add_argument("--made-at")
     p.add_argument("--sealed-evidence")
+    p.add_argument("--lessons", default="", help="comma-separated adopted lesson ids")
     p = sub.add_parser("resolve")
     p.add_argument("--question", required=True)
     p.add_argument("--outcome", required=True, choices=OUTCOMES)
@@ -369,6 +519,19 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("learn")
     p.add_argument("--min-n", type=int, default=30)
     p.add_argument("--prior-strength", type=float, default=20.0)
+    p = sub.add_parser("lesson-propose")
+    p.add_argument("--text", required=True)
+    p.add_argument("--scope", required=True)
+    p.add_argument("--evidence", required=True, help="comma-separated resolved question ids")
+    p.add_argument("--proposed-by", required=True)
+    p = sub.add_parser("lesson-decide")
+    p.add_argument("--lesson", required=True)
+    p.add_argument("--decision", required=True, choices=LESSON_DECISIONS)
+    p.add_argument("--decided-by", required=True)
+    p.add_argument("--reason", required=True)
+    p = sub.add_parser("lesson-score")
+    p.add_argument("--min-n", type=int, default=30)
+    p.add_argument("--margin", type=float, default=0.01)
     args = parser.parse_args(argv)
     try:
         if args.command == "verify":
@@ -381,15 +544,27 @@ def main(argv: list[str] | None = None) -> int:
                       args.base_rate, args.project)
         elif args.command == "forecast":
             out = forecast(args.ledger, args.question, args.author, args.probability,
-                           args.rationale, args.made_at, _json_arg(args.sealed_evidence))
+                           args.rationale, args.made_at, _json_arg(args.sealed_evidence),
+                           [x.strip() for x in args.lessons.split(",") if x.strip()])
         elif args.command == "resolve":
             out = resolve(args.ledger, args.question, args.outcome, _json_arg(args.observed),
                           args.resolved_at, args.void_reason)
+        elif args.command == "lesson-propose":
+            out = propose_lesson(args.ledger, args.text, args.scope,
+                                 [x.strip() for x in args.evidence.split(",") if x.strip()],
+                                 args.proposed_by)
+        elif args.command == "lesson-decide":
+            out = decide_lesson(args.ledger, args.lesson, args.decision, args.decided_by,
+                                args.reason)
         else:
             records = load(args.ledger)
             verify(records)
-            out = score(records) if args.command == "score" else \
-                learn(records, args.min_n, args.prior_strength)
+            if args.command == "score":
+                out = score(records)
+            elif args.command == "learn":
+                out = learn(records, args.min_n, args.prior_strength)
+            else:
+                out = score_lessons(records, args.min_n, args.margin)
     except GateError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 2

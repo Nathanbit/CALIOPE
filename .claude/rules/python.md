@@ -7,10 +7,10 @@ paths:
 Condensado de `rules/common` y `rules/python` de ECC (affaan-m/ECC, MIT); manda
 `AGENTS.md` si algo choca.
 
-- Raíz (`caliope_loop.py`, `recursive_evidence.py`, `tools/`, `.claude/hooks/`):
-  solo biblioteca estándar, Python 3.11+. Pruebas con `unittest` en `tests/`.
-- Lab (`labs/macroflow_v0_9_5_import/`): dependencias de su `pyproject.toml`;
-  pruebas con `pytest` desde esa carpeta. No importes el lab desde la raíz.
+- Raíz (`caliope_loop.py`, `recursive_evidence.py`, `prediction_ledger.py`,
+  `tools/`, `.claude/hooks/`): solo biblioteca estándar, Python 3.11+. Pruebas
+  con `unittest` en `tests/`.
+- `archive/`: sin mantenimiento. No importes nada de `archive/` desde el núcleo.
 - Anotaciones de tipo en funciones públicas; `@dataclass(frozen=True)` para
   registros de evidencia y resultados.
 - Errores: captura excepciones concretas; nada de `except: pass`. Un dato que

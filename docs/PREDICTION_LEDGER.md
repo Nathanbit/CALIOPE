@@ -76,6 +76,43 @@ observada:
 Es el mismo patrón que el Outcome Governor de MacroFlow v0.9.6 (muestra
 mínima, contracción hacia un valor neutral), aplicado a las predicciones.
 
+## Lecciones: mejorar al que mejora
+
+`learn` es el primer nivel de recursividad: compara confianza y frecuencia.
+El segundo nivel, inspirado en el *improvement harness* de
+[Harness²](https://github.com/google-research/harness2) (Apache-2.0), guarda
+**lecciones** y las juzga por sus resultados:
+
+```powershell
+# 1. Proponer: la lección debe citar preguntas ya resueltas
+python prediction_ledger.py --ledger $L lesson-propose `
+  --text "En rupturas con volumen < 0,5x, bajar la confianza en la continuación" `
+  --scope claude --evidence q-...,q-... --proposed-by learn
+
+# 2. Decidir (persona): proposed -> adopt | reject; adopted -> retire
+python prediction_ledger.py --ledger $L lesson-decide --lesson l-... --decision adopt --decided-by nathan --reason "..."
+
+# 3. Aplicarla al pronosticar
+python prediction_ledger.py --ledger $L forecast --question q-... --author claude --probability 0.4 --lessons l-...
+
+# 4. Juzgarla
+python prediction_ledger.py --ledger $L lesson-score
+```
+
+| Compuerta | Qué impide |
+|---|---|
+| Evidencia obligatoria y resuelta | Lecciones inventadas o basadas en preguntas abiertas |
+| Solo una persona adopta, rechaza o retira, con motivo | Que el sistema cambie su propio criterio solo |
+| Transiciones `proposed→adopt/reject`, `adopted→retire` | Readoptar en silencio una lección retirada |
+| Un pronóstico solo cita lecciones adoptadas, y nunca retroactivo | Atribuir a una lección aciertos anteriores a ella |
+| `lesson-score` compara antes y después de la adopción, con 30 casos por lado | Juzgar una lección con los mismos datos que la crearon o con muestras mínimas |
+
+`lesson-score` dice `helps`, `neutral`, `hurts` o `insufficient`. Si una
+lección empeora los pronósticos, **propone** retirarla; no la retira.
+
+A diferencia de Harness², aquí nada se adopta sin decisión humana registrada
+y cada lección se evalúa fuera de la muestra que la originó.
+
 ## Primer caso registrado
 
 `projects/macroflow/predictions/ledger.jsonl` contiene la predicción del
@@ -127,3 +164,6 @@ Ningún código se copió; las ideas se reimplementaron desde cero:
   muestra pequeña. La identidad es de Murphy (1973).
 - [Lista de comprobación de Metaculus](https://www.metaculus.com/help/question-checklist/):
   fechas absolutas, fuente y criterio de resolución explícitos.
+- [google-research/harness2](https://github.com/google-research/harness2)
+  (Apache-2.0): memoria persistente de lecciones respaldadas por evidencia
+  que guía el trabajo futuro y se juzga a sí misma.
