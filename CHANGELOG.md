@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.0 — 2026-10-22
+
+- `prediction_ledger.py`: registro de predicciones binarias encadenado por
+  SHA-256 (`ask`, `forecast`, `resolve`, `verify`, `score`, `learn`).
+  Compuertas: id ligado al texto/plazo/fuente/criterio, sin pronósticos tras
+  el resultado, sin resolución antes del plazo ni sin pronósticos, `void` con
+  motivo, probabilidades inválidas como `failure`, retroactivos solo con
+  evidencia de sellado.
+- Puntuación Brier y log por autor, referencias moneda/tasa base,
+  descomposición de Murphy con residuo y ECE, aviso con menos de 30 muestras.
+- `learn`: aprendizaje recursivo de la propia calibración con contracción y
+  muestra mínima; solo propone, nunca escribe ni aplica.
+- `doctor` verifica la cadena de `projects/*/predictions/*.jsonl`.
+- Primer caso: predicción BTC del 2026-10-21 (sellada en `17235a6`) resuelta
+  como `void` y `false` con datos de Binance.
+- Ideas adaptadas sin copiar código de hey-research-lab/brier (MIT),
+  calibaudit (Apache-2.0) y la lista de Metaculus. Detalle en
+  `docs/PREDICTION_LEDGER.md`.
+- Verificación: 66 tests OK (11 nuevos), `doctor` sano (14 pass, 2 warn previos).
+
 ## 0.8.0 — 2026-10-22
 
 - CALIOPE se centra en dos piezas: el registro de evidencia y predicciones, y

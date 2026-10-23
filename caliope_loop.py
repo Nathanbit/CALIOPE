@@ -947,6 +947,28 @@ def _check_workflows() -> list[dict]:
     return out
 
 
+def _check_prediction_ledgers() -> list[dict]:
+    """A tampered, reordered or truncated prediction ledger fails closed."""
+    out: list[dict] = []
+    ledgers = sorted((ROOT / "projects").glob("*/predictions/*.jsonl"))
+    if not ledgers:
+        return out
+    try:
+        import prediction_ledger
+    except ImportError as exc:
+        return [{"check": "prediction_ledgers", "status": "fail", "detail": f"no importable: {exc}"[:200]}]
+    for ledger in ledgers:
+        rel = ledger.relative_to(ROOT).as_posix()
+        try:
+            records = prediction_ledger.load(ledger)
+            prediction_ledger.verify(records)
+            out.append({"check": f"ledger:{rel}", "status": "pass",
+                        "detail": f"cadena íntegra ({len(records)} registros)"})
+        except prediction_ledger.GateError as exc:
+            out.append({"check": f"ledger:{rel}", "status": "fail", "detail": str(exc)[:200]})
+    return out
+
+
 def doctor() -> dict:
     checks: list[dict] = []
     ok_py = sys.version_info >= (3, 11)
@@ -967,6 +989,7 @@ def doctor() -> dict:
         found = _check_manifest(manifest)
         checks.extend(found or [{"check": f"manifest:{manifest.relative_to(ROOT).as_posix()}",
                                  "status": "pass", "detail": "todos los hashes coinciden"}])
+    checks.extend(_check_prediction_ledgers())
     checks.extend(_check_workflows())
     try:
         found = scan_secrets()

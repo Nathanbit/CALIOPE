@@ -16,6 +16,10 @@ usuario de CALIOPE, no su núcleo.
 
 ## Componentes
 
+- `prediction_ledger.py`: registro de predicciones binarias encadenado por
+  SHA-256: preguntas con criterio de resolución, pronósticos sellados antes
+  del resultado, puntuación Brier/log con calibración de Murphy y aprendizaje
+  recursivo que solo propone (ver `docs/PREDICTION_LEDGER.md`).
 - `recursive_evidence.py`: ledger de evidencia encadenado por SHA-256
   (observación, hipótesis, candidato, validación, promoción humana).
 - `caliope_loop.py`: runner local, acotado y *fail-closed* para preparar e
