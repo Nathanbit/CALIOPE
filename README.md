@@ -63,7 +63,11 @@ python tools/verify.py --all                 # todo en verde antes de usarlo
 
 $L = "projects/macroflow/predictions/ledger.jsonl"
 
-# Sellar una predicción
+# Sellar una predicción en un paso (concepto → pregunta + pronóstico)
+python prediction_ledger.py --ledger $L seal --concept '@projects/macroflow/predictions/concepto.json' `
+  --author nathan --probability 0.30 --rationale "..." --dry-run   # revisar; luego sin --dry-run
+
+# O por partes
 python prediction_ledger.py --ledger $L ask `
   --text "BTCUSDT cierra una vela de 15m por debajo de 80.000 antes del 2026-10-29T00:00Z" `
   --horizon-end 2026-10-29T00:00:00Z `
@@ -98,6 +102,7 @@ Guía completa: [`docs/PREDICTION_LEDGER.md`](docs/PREDICTION_LEDGER.md).
 | `recursive_evidence.py` | Ledger de evidencia por operación y cartera (observación → hipótesis → candidato → validación → promoción humana) |
 | `caliope_loop.py` | Runner de revisión por modelos |
 | `caliope_doctor.py` | `doctor` y escáner de secretos |
+| `concepts.py` | Conceptos: la predicción como estructura; texto y regla generados, clase para aprender |
 | `forecast_scoring.py` | Puntuación, calibración, `learn` y juicio de lecciones (solo lectura) |
 | `evidence_io.py` | Primitivas comunes de todos los ledgers |
 | `contracts/`, `workflows/` | Esquemas JSON y contratos de revisión |
@@ -109,12 +114,11 @@ Guía completa: [`docs/PREDICTION_LEDGER.md`](docs/PREDICTION_LEDGER.md).
 ## Lo que falta
 
 1. **IAs y MacroFlow como autores**: que cada revisión del runner y cada señal del indicador queden como pronósticos puntuables.
-2. **Registrar sin fricción**: sellar una predicción con un solo mensaje.
-3. **Un rival base automático**, calculado con volatilidad histórica, al que haya que ganar.
-4. **Sellado de tiempo independiente** con OpenTimestamps (hoy, manual desde tu PC).
-5. **Panel visual** de calibración y lecciones.
-6. **Preguntas no binarias** (rangos, con CRPS o cuantiles).
-7. **Adaptadores** para que el runner consulte las 8 IAs sin copiar y pegar.
+2. **Un rival base automático**, calculado con volatilidad histórica, al que haya que ganar.
+3. **Sellado de tiempo independiente** con OpenTimestamps (hoy, manual desde tu PC).
+4. **Panel visual** de calibración y lecciones.
+5. **Preguntas no binarias** (rangos, con CRPS o cuantiles).
+6. **Adaptadores** para que el runner consulte las 8 IAs sin copiar y pegar.
 
 ## Verificar
 

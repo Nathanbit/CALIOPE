@@ -45,7 +45,8 @@ def scored_pairs(records: list[dict]) -> tuple[list[dict], dict]:
                 continue
             pairs.append({"author": item["author"], "p": float(item["probability"]), "y": y,
                           "base_rate": questions[qid].get("base_rate"), "question_id": qid,
-                          "seq": item["seq"], "lessons": item.get("lessons_applied") or []})
+                          "seq": item["seq"], "lessons": item.get("lessons_applied") or [],
+                          "concept_class": questions[qid].get("concept_class")})
     counts["failures_by_author"] = failures_by_author
     return pairs, counts
 
@@ -118,41 +119,65 @@ def score(records: list[dict]) -> dict:
                   "base_rate": {"n": len(with_base),
                                 "brier": brier([dict(x, p=x["base_rate"]) for x in with_base]),
                                 "authors_on_same_questions": brier(with_base)}},
-              "calibration": murphy(pairs)}
+              "calibration": murphy(pairs), "by_concept": by_concept(pairs)}
     if len(pairs) < 30:
         report["warning"] = (f"only {len(pairs)} scored forecasts: calibration and skill are "
                              "not statistically meaningful yet")
     return report
 
 
+def by_concept(pairs: list[dict]) -> list[dict]:
+    """Outcomes per concept class: how often this *kind* of event happens
+    (the empirical base rate) and how each author did on it."""
+    rows = []
+    for label in sorted({x["concept_class"] for x in pairs if x["concept_class"]}):
+        group = [x for x in pairs if x["concept_class"] == label]
+        rows.append({"concept_class": label, "n": len(group),
+                     "observed_rate": sum(x["y"] for x in group) / len(group),
+                     "brier": brier(group),
+                     "authors": {a: brier([x for x in group if x["author"] == a])
+                                 for a in sorted({x["author"] for x in group})}})
+    return rows
+
+
 def learn(records: list[dict], min_n: int = 30, prior_strength: float = 20.0,
-          bins: int = 5) -> dict:
-    """Per author and probability bin, compare stated confidence with observed
-    frequency. Shrinks the observed frequency toward the stated probability
-    with ``prior_strength`` pseudo-observations, and only proposes an
-    adjustment once a bin has ``min_n`` resolved forecasts. Output is an
-    observation-only proposal; nothing is applied automatically."""
+          bins: int = 5, group_by: str = "author") -> dict:
+    """Per author (or per author and concept class) and probability bin,
+    compare stated confidence with observed frequency. Shrinks the observed
+    frequency toward the stated probability with ``prior_strength``
+    pseudo-observations, and only proposes an adjustment once a bin has
+    ``min_n`` resolved forecasts. ``group_by="concept"`` learns per kind of
+    prediction, so calibration transfers between questions of the same class
+    (the LCM idea). Output is an observation-only proposal."""
+    if group_by not in ("author", "concept"):
+        raise ValueError("group_by must be 'author' or 'concept'")
     pairs, counts = scored_pairs(records)
+    if group_by == "concept":
+        pairs = [x for x in pairs if x["concept_class"]]
+    keys = sorted({(x["author"], x["concept_class"] if group_by == "concept" else None)
+                   for x in pairs}, key=lambda k: (k[0], k[1] or ""))
     lessons = []
-    for author in sorted({x["author"] for x in pairs}):
-        own = [x for x in pairs if x["author"] == author]
+    for author, label in keys:
+        own = [x for x in pairs if x["author"] == author
+               and (group_by == "author" or x["concept_class"] == label)]
         for key, group in sorted(_grouped(own, bins).items()):
             n = len(group)
             stated = sum(x["p"] for x in group) / n
             hits = sum(x["y"] for x in group)
             shrunk = (hits + prior_strength * stated) / (n + prior_strength)
             ready = n >= min_n
+            subject = f"{author} on {label}" if label else author
             lessons.append({
                 "evidence_questions": sorted({x["question_id"] for x in group}),
-                "author": author, "bin": _bin_label(key, bins), "n": n,
+                "author": author, "concept_class": label, "bin": _bin_label(key, bins), "n": n,
                 "stated_mean": round(stated, 4), "observed_freq": round(hits / n, 4),
                 "shrunk_freq": round(shrunk, 4), "ready": ready,
-                "proposal": (f"When {author} states ~{stated:.0%}, treat it as ~{shrunk:.0%}"
+                "proposal": (f"When {subject} states ~{stated:.0%}, treat it as ~{shrunk:.0%}"
                              if ready else f"gathering evidence ({n}/{min_n})"),
             })
     return {"evidence_type": "inference", "observation_only": True, "automatic_edit": False,
             "requires_human_decision": True, "min_n": min_n, "prior_strength": prior_strength,
-            "counts": counts, "lessons": lessons}
+            "group_by": group_by, "counts": counts, "lessons": lessons}
 
 
 def score_lessons(records: list[dict], min_n: int = 30, margin: float = 0.01) -> dict:

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.15.0 — 2026-10-23
+
+Paso 2: sellar una predicción en un paso, con conceptos (idea del Large
+Concept Model de Meta FAIR, sin el modelo neuronal).
+
+- `concepts.py`: una predicción se expresa como concepto (activo, evento,
+  niveles, ventana, precio de referencia observado y su fuente). El texto, el
+  criterio y la regla se generan de forma determinista; se rechazan conceptos
+  que no son predicciones (el precio ya cumple el evento).
+- `prediction_ledger.py seal`: concepto → pregunta + pronóstico, ambos o
+  ninguno, bajo un solo bloqueo; `--dry-run` pasa todas las compuertas sin
+  escribir. `verify` comprueba que el texto de una pregunta con concepto
+  coincide con el generado y que su clase es la correcta.
+- Clase de concepto (sin números exactos): `score` incluye `by_concept` y
+  `learn --by concept` calibra por autor y clase.
+- Skill `caliope-predict`: de "sella: BTC toca 80.000 antes del viernes, 30%"
+  al concepto, con dry run y confirmación; precio de referencia siempre
+  observado, nunca inventado.
+- 10 tests nuevos.
+
 ## 0.14.0 — 2026-10-23
 
 Refactors de mantenibilidad de la auditoría, sin cambiar comportamiento ni

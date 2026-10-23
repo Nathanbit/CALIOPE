@@ -6,7 +6,8 @@
 
 | Ruta | Qué es |
 |---|---|
-| `prediction_ledger.py` | Registro de predicciones encadenado: `ask`, `forecast`, `resolve`, `resolve-auto`, `verify`, `score`, `learn`, `lesson-propose`, `lesson-decide`, `lesson-score` |
+| `prediction_ledger.py` | Registro de predicciones encadenado: `seal`, `ask`, `forecast`, `resolve`, `resolve-auto`, `verify`, `score`, `learn`, `lesson-propose`, `lesson-decide`, `lesson-score` |
+| `concepts.py` | Conceptos (idea LCM): predicción como estructura → texto, criterio y regla deterministas; clase de concepto para aprender |
 | `forecast_scoring.py` | Puntuación de solo lectura: Brier/log, Murphy, `learn`, `score_lessons` |
 | `resolver.py` | Reglas de resolución y velas: evalúa sin ver pronósticos; `tools/fetch_klines.py` descarga datos públicos |
 | `recursive_evidence.py` | Ledger encadenado por SHA-256 de operaciones y cartera |

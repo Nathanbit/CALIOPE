@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+import concepts
 import evidence_io as eio
 import resolver
 
@@ -189,6 +190,23 @@ def _check_question(state: State, record: dict) -> None:
                 raise GateError("rule is not in normalized form")
         except resolver.ResolutionError as exc:
             raise GateError(str(exc)) from exc
+    concept = record.get("concept")
+    if concept is not None:
+        try:
+            if concepts.validate_concept(concept) != concept:
+                raise GateError("concept is not in normalized form")
+            generated = concepts.question_fields(concept)
+            expected_class = concepts.concept_class(concept)
+        except concepts.ConceptError as exc:
+            raise GateError(f"concept: {exc}") from exc
+        stored = {"text": text, "source": source, "criteria": criteria, "horizon_end": horizon,
+                  "rule": rule}
+        if stored != generated:
+            raise GateError("question fields do not match the wording generated from its concept")
+        if record.get("concept_class") != expected_class:
+            raise GateError("concept_class does not match the concept")
+    elif record.get("concept_class") is not None:
+        raise GateError("concept_class without a concept")
     qid = question_id(text, horizon, source, criteria, rule)
     if record.get("question_id") != qid:
         raise GateError("question_id does not match the question fields")
@@ -341,22 +359,36 @@ def _locked(path: Path):
                               timeout=LOCK_TIMEOUT_SECONDS)
 
 
-def commit(path: Path, build: Callable[[State], dict]) -> dict:
-    """Load, verify, build, check and append one record under the lock."""
+def commit_many(path: Path, builds: list[Callable[[State], dict]],
+                dry_run: bool = False) -> list[dict]:
+    """Load, verify, then build and check every record before writing any of
+    them, all under one lock: either all records are appended or none.
+    ``dry_run`` runs every gate and returns the records without writing."""
     with _locked(path):
         records = load(path)
         state = verify(records)
-        body = dict(build(state))
-        body["prev_hash"] = records[-1]["hash"] if records else GENESIS
-        body["seq"] = len(records) + 1
-        body["hash"] = sha256_text(canonical(body))
-        check(state, body)
-        line = canonical(body) + "\n"
+        previous = records[-1]["hash"] if records else GENESIS
+        bodies = []
+        for build in builds:
+            body = dict(build(state))
+            body["prev_hash"] = previous
+            body["seq"] = len(records) + len(bodies) + 1
+            body["hash"] = sha256_text(canonical(body))
+            check(state, body)
+            apply(state, body)
+            bodies.append(body)
+            previous = body["hash"]
+        if dry_run:
+            return bodies
         with path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(line)
+            handle.write("".join(canonical(body) + "\n" for body in bodies))
             handle.flush()
             os.fsync(handle.fileno())
-        return body
+        return bodies
+
+
+def commit(path: Path, build: Callable[[State], dict]) -> dict:
+    return commit_many(path, [build])[0]
 
 
 def index(records: list[dict]) -> tuple[dict, dict, dict]:
@@ -398,26 +430,67 @@ def ask(path: Path, text: str, horizon_end: str, source: str, criteria: str,
     return commit(path, build)
 
 
-def forecast(path: Path, qid: str, author: str, probability: float | None, rationale: str,
-             made_at: str | None = None, sealed_evidence: dict | None = None,
-             lessons_applied: list[str] | None = None) -> dict:
-    """Seal a forecast. A ``made_at`` in the past needs ``sealed_evidence``
-    (64-hex sha256 of an earlier sealed file and the commit that published it)."""
+def _concept_question(concept: dict, project: str | None) -> Callable[[State], dict]:
+    try:
+        normalized = concepts.validate_concept(concept)
+        fields = concepts.question_fields(normalized)
+        label = concepts.concept_class(normalized)
+    except concepts.ConceptError as exc:
+        raise GateError(f"concept: {exc}") from exc
+
+    def build(_: State) -> dict:
+        return {"type": "question", "question_id": question_id(
+                    fields["text"], fields["horizon_end"], fields["source"], fields["criteria"],
+                    fields["rule"]),
+                "base_rate": None, "project": project, "concept": normalized,
+                "concept_class": label, "recorded_at": utc_now_iso(), **fields}
+    return build
+
+
+def seal(path: Path, concept: dict, author: str, probability: float | None, rationale: str,
+         project: str | None = None, lessons_applied: list[str] | None = None,
+         dry_run: bool = False) -> dict:
+    """Step 2 shortcut: one concept becomes a question plus the author's
+    forecast, appended together or not at all."""
+    question = _concept_question(concept, project)
+    holder: dict = {}
+
+    def ask_build(state: State) -> dict:
+        holder.update(question(state))
+        return holder
+
+    def forecast_build(state: State) -> dict:
+        return _forecast_body(holder["question_id"], author, probability, rationale, None, None,
+                              lessons_applied)
+    q_record, f_record = commit_many(path, [ask_build, forecast_build], dry_run=dry_run)
+    return {"dry_run": dry_run, "question": q_record, "forecast": f_record}
+
+
+def _forecast_body(qid: str, author: str, probability: float | None, rationale: str,
+                   made_at: str | None, sealed_evidence: dict | None,
+                   lessons_applied: list[str] | None) -> dict:
     status = "ok"
     if probability is None or isinstance(probability, bool) \
             or not isinstance(probability, (int, float)) or not math.isfinite(probability) \
             or not 0.0 <= probability <= 1.0:
         status, probability = FAILURE, None  # never coerced to 0.5, never dropped
-    made = iso_utc(parse_time(made_at, "made_at")) if made_at is not None else None
+    now = utc_now_iso()
+    made = iso_utc(parse_time(made_at, "made_at")) if made_at is not None else now
+    return {"type": "forecast", "question_id": qid, "author": (author or "").strip(),
+            "probability": probability, "status": status, "rationale": (rationale or "").strip(),
+            "made_at": made, "sealed_evidence": sealed_evidence,
+            "lessons_applied": sorted(set(lessons_applied or [])), "recorded_at": now}
 
-    def build(_: State) -> dict:
-        now = utc_now_iso()
-        return {"type": "forecast", "question_id": qid, "author": (author or "").strip(),
-                "probability": probability, "status": status,
-                "rationale": (rationale or "").strip(), "made_at": made or now,
-                "sealed_evidence": sealed_evidence,
-                "lessons_applied": sorted(set(lessons_applied or [])), "recorded_at": now}
-    return commit(path, build)
+
+def forecast(path: Path, qid: str, author: str, probability: float | None, rationale: str,
+             made_at: str | None = None, sealed_evidence: dict | None = None,
+             lessons_applied: list[str] | None = None) -> dict:
+    """Seal a forecast. A ``made_at`` in the past needs ``sealed_evidence``
+    (64-hex sha256 of an earlier sealed file and the commit that published it)."""
+    if made_at is not None:
+        parse_time(made_at, "made_at")
+    return commit(path, lambda _: _forecast_body(qid, author, probability, rationale, made_at,
+                                                 sealed_evidence, lessons_applied))
 
 
 def resolve(path: Path, qid: str, outcome: str, observed: dict, resolved_at: str | None = None,
@@ -542,6 +615,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(run=lambda a: forecast(a.ledger, a.question, a.author, a.probability,
                                           a.rationale, a.made_at, json_arg(a.sealed_evidence),
                                           _ids(a.lessons)))
+    p = sub.add_parser("seal", help="concept -> question + forecast in one step")
+    p.add_argument("--concept", required=True, help="inline JSON or @path (see concepts.py)")
+    p.add_argument("--author", required=True)
+    p.add_argument("--probability", type=float, required=True)
+    p.add_argument("--rationale", default="")
+    p.add_argument("--project")
+    p.add_argument("--lessons", default="", help="comma-separated adopted lesson ids")
+    p.add_argument("--dry-run", action="store_true",
+                   help="run every gate and print the records without writing them")
+    p.set_defaults(run=lambda a: seal(a.ledger, json_arg(a.concept), a.author, a.probability,
+                                      a.rationale, a.project, _ids(a.lessons), a.dry_run))
     p = sub.add_parser("resolve")
     p.add_argument("--question", required=True)
     p.add_argument("--outcome", required=True, choices=OUTCOMES)
@@ -558,8 +642,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("learn")
     p.add_argument("--min-n", type=int, default=30)
     p.add_argument("--prior-strength", type=float, default=20.0)
+    p.add_argument("--by", choices=("author", "concept"), default="author",
+                   help="concept: learn per kind of prediction (concept class)")
     p.set_defaults(run=lambda a: _read_only(
-        lambda r: fs.learn(r, a.min_n, a.prior_strength))(a))
+        lambda r: fs.learn(r, a.min_n, a.prior_strength, group_by=a.by))(a))
     p = sub.add_parser("lesson-propose")
     p.add_argument("--text", required=True)
     p.add_argument("--scope", required=True)
