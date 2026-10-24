@@ -42,6 +42,7 @@ ROOT_TEST_PREFIXES = (
     "workflows/",
     "tests/",
     "evals/",
+    "labs/",
     "tools/",
     "security/",
     ".githooks/",
