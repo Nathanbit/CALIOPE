@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.21.0 — 2026-10-24
+
+Interfaz completa del panel.
+
+- Pestañas Sellar, Preguntas y Marcador. Preguntas: cuenta regresiva,
+  pronósticos por autor y comandos para resolver las que ya cerraron.
+  Marcador: Brier contra moneda y contra el rival de volatilidad, enjambre,
+  gráfico de calibración y veredicto de `rival` desde `state/rival.json`.
+- `tools/panel/ledger.js`, lectura pura del ledger con la misma regla de
+  puntuación que `forecast_scoring.py`, y 7 pruebas en Node.
+
 ## 0.20.0 — 2026-10-24
 
 Rivales más duros y evaluaciones fijas, tomando ideas de bhoult/correlation,
