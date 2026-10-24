@@ -1,0 +1,5 @@
+# Solo para labs/causal_btc/discover.py. El núcleo de CALIOPE no las usa.
+# causalts es GPL-3.0 y trae PyTorch (varios GB con CUDA). En un entorno aparte:
+#   python -m venv .venv-causal && .venv-causal\Scripts\activate
+#   pip install -r labs/causal_btc/requirements.txt
+causalts==0.27.0

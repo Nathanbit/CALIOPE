@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.0 — 2026-10-24
+
+Laboratorio causal (`labs/causal_btc/`), aparte del núcleo.
+
+- `fetch_series.py` (biblioteca estándar): BTC y ETH diarios y funding de
+  Binance, y Nasdaq-100, S&P 500, oro y bono a 10 años de Stooq. Sin claves.
+  Una fuente que falla queda fuera, sin rellenar.
+- `discover.py`: CEDAR de bloomberg/causal-ts (GPL-3.0, PyTorch, en un
+  entorno aparte) sobre el periodo de descubrimiento. Escribe las hipótesis
+  "X en t−k → BTC en t" (k ≥ 1) en un archivo nuevo con el hash de los
+  datos, para congelarlas con un commit antes de evaluar.
+- `evaluate.py` (biblioteca estándar): prueba cada hipótesis en el holdout
+  contra permutaciones por bloques, con corrección de Bonferroni.
+- 7 tests con datos sintéticos (una relación real se sostiene, el ruido no).
+
 ## 0.21.0 — 2026-10-24
 
 Interfaz completa del panel.
