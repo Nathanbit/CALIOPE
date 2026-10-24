@@ -33,10 +33,12 @@ from pathlib import Path
 
 import evidence_io as eio
 
-RESOLVER_VERSION = "1.1"
+RESOLVER_VERSION = "1.2"
 MAX_CANDLES = 500_000
 SYMBOL = re.compile(r"[A-Z0-9]{2,30}")
-INTERVAL_MS = {"1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+# Seconds: Binance serves 1s candles; 5s-30s are built from them (``aggregate``).
+AGGREGATED_FROM_1S = {"5s": 5_000, "10s": 10_000, "15s": 15_000, "30s": 30_000}
+INTERVAL_MS = {"1s": 1_000, **AGGREGATED_FROM_1S, "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
                "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 RULE_KEYS = {
     "touch_first": {"kind", "symbol", "interval", "start", "lower", "upper", "true_if"},
@@ -132,6 +134,65 @@ def _parse_row(row: object) -> tuple[dict, int]:
             or candle["high"] < max(candle["open"], candle["close"]):
         raise ResolutionError(f"inconsistent prices in candle {iso_ms(open_ms)}")
     return candle, close_ms
+
+
+def aggregate(rows: list, step_ms: int) -> list[list]:
+    """Group 1s Binance rows into ``step_ms`` candles, deterministically.
+
+    open = first open, high = max, low = min, close = last close, volume =
+    sum, open time = bucket start, close time = bucket start + step - 1. A
+    bucket is built only when all of its seconds are present: a missing
+    second is unknown, never "no trade" (fail closed)."""
+    if step_ms % 1_000 or step_ms <= 1_000:
+        raise ResolutionError("aggregation needs a multiple of 1s above 1s")
+    seconds: dict[int, dict] = {}
+    for row in rows:
+        candle, close_ms = _parse_row(row)
+        if close_ms != candle["open_ms"] + 999:
+            raise ResolutionError("aggregate expects 1s candles")
+        if candle["open_ms"] in seconds:
+            raise ResolutionError(f"duplicate candle {iso_ms(candle['open_ms'])}")
+        candle["volume"] = float(row[5])
+        seconds[candle["open_ms"]] = candle
+    out = []
+    for start in sorted({t - t % step_ms for t in seconds}):
+        group = [seconds.get(start + k) for k in range(0, step_ms, 1_000)]
+        if any(c is None for c in group):
+            continue  # incomplete bucket: left out, so coverage checks catch it
+        out.append([start, repr(group[0]["open"]), repr(max(c["high"] for c in group)),
+                    repr(min(c["low"] for c in group)), repr(group[-1]["close"]),
+                    repr(sum(c["volume"] for c in group)), start + step_ms - 1])
+    return out
+
+
+def tiebreak(rule: dict, horizon_end: str, evidence: dict, fine: dict) -> tuple[str, dict]:
+    """Order the two levels of a ``touch_first`` tie with finer candles.
+
+    Used only when both levels were touched inside one candle of the rule's
+    interval. ``fine`` must be a strictly finer interval that divides it, and
+    cover that whole candle; otherwise the question stays void."""
+    rule = validate_rule(rule, horizon_end)
+    step = INTERVAL_MS[rule["interval"]]
+    fine_interval = fine.get("interval")
+    if fine_interval not in INTERVAL_MS or INTERVAL_MS[fine_interval] >= step \
+            or step % INTERVAL_MS[fine_interval]:
+        raise ResolutionError(f"tie-break data must be a finer interval that divides {rule['interval']}")
+    start = to_ms(evidence["decisive_candle"], "decisive_candle")
+    end = start + step
+    window = dict(rule, interval=fine_interval, start=iso_ms(start))
+    candles = _candles(fine, window, iso_ms(end))
+    base = {"tiebreak_interval": fine_interval, "tiebreak_candles": len(candles)}
+    for c in candles:
+        low_hit, high_hit = c["low"] <= rule["lower"], c["high"] >= rule["upper"]
+        if low_hit and high_hit:
+            return "void", dict(base, void_reason=f"both levels touched inside one {fine_interval} "
+                                                   "candle too: order unknowable",
+                                tiebreak_candle=iso_ms(c["open_ms"]))
+        if low_hit or high_hit:
+            first = "lower_first" if low_hit else "upper_first"
+            return ("true" if first == rule["true_if"] else "false"), dict(
+                base, first=first, tiebreak_candle=iso_ms(c["open_ms"]))
+    raise ResolutionError("the finer candles do not touch either level: data disagree")
 
 
 def _candles(data: dict, rule: dict, horizon_end: str) -> list[dict]:

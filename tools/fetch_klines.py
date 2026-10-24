@@ -100,16 +100,20 @@ def main(argv: list[str] | None = None) -> int:
         if not 0 <= args.lookback_hours <= 168:
             raise ValueError("--lookback-hours must be between 0 and 168")
         fetch_from = start_ms - int(args.lookback_hours * 3_600_000)
+        source_interval = "1s" if args.interval in resolver.AGGREGATED_FROM_1S else args.interval
         rows = []
-        for url in page_urls(symbol, args.interval, fetch_from, end_ms):
+        for url in page_urls(symbol, source_interval, fetch_from, end_ms):
             rows.extend(download(url))
+        if source_interval != args.interval:
+            rows = resolver.aggregate(rows, resolver.INTERVAL_MS[args.interval])
     except (ValueError, resolver.ResolutionError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 2
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = {"symbol": symbol, "interval": args.interval, "start": args.start, "end": args.end,
                "lookback_hours": args.lookback_hours,
-               "source": "api.binance.com/api/v3/klines",
+               "source": "api.binance.com/api/v3/klines" + (
+                   f" (1s aggregated to {args.interval})" if source_interval != args.interval else ""),
                "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                "klines": rows}
     with out.open("x", encoding="utf-8", newline="\n") as handle:
