@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.25.0 — 2026-10-24
+
+Auditoría de los PRs #19 a #33. Cuatro hallazgos confirmados al ejecutarlos y
+corregidos, con regresiones en `tests/test_audit_20261024.py`.
+
+- **Medio. El resolutor podía elegir el resultado de un empate.** En un
+  `touch_first` con los dos niveles en la misma vela, pasar u omitir
+  `--fine-klines` decidía entre `true`/`false` y `void` después de ver los
+  pronósticos. Ahora un empate sin datos finos se rechaza; sin datos finos se
+  anula a mano, con el motivo registrado.
+- **Medio. La familia de `rival` contaba autores, no veredictos.** Con el
+  rival de volatilidad cada autor se juzga dos veces, así que `k` se quedaba
+  en la mitad y el intervalo era más estrecho de lo debido. Ahora
+  `k = autores × rivales con datos`.
+- **Bajo. La tasa de una clase de concepto contaba pronósticos, no
+  preguntas.** Con cuatro autores en una pregunta, esa pregunta pesaba cuatro
+  veces en `by_concept` y en `thought_state`. Ahora cuenta cada pregunta una
+  vez (`thought_state` 1.1; los estados 1.0 se siguen verificando con su
+  regla).
+- **Bajo. Un pronóstico en vivo podía omitir su `thought_state`.** `verify`
+  solo comprobaba el estado si estaba presente. Ahora es obligatorio desde la
+  fusión de esa función (2026-10-23 12:18 UTC).
+
+Sin verificar, igual que antes: Binance, Stooq y mempool.space reales,
+velas de 1 segundo reales, Whisper en el navegador y PowerShell en Windows.
+
 ## 0.24.0 — 2026-10-24
 
 Velas de segundos y desempate de `touch_first`. Resolutor 1.2.

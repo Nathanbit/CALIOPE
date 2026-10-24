@@ -77,6 +77,12 @@ siguiente. CALIOPE no entrena modelos; adopta la idea como cadena auditable:
 - `verify` recalcula ese estado desde los registros anteriores: si alguien
   declara un historial o una calibración que el ledger no mostraba, falla,
   aunque el hash del registro sea correcto.
+- Desde la fusión de esta función (2026-10-23 12:18 UTC), un pronóstico en
+  vivo sin `thought_state` se rechaza; solo los retroactivos con evidencia
+  sellada van sin él. Cada estado guarda su `version`, y `verify` lo
+  recalcula con las reglas de esa versión. La 1.1 cuenta la historia de una
+  clase **por pregunta**; la 1.0 la contaba por pronóstico, de modo que una
+  pregunta con cuatro autores pesaba cuatro veces.
 - `state --author X [--question q-...]` enseña el estado antes de
   pronosticar; la skill `caliope-predict` lo muestra para que cada resultado
   informe la siguiente decisión. Los pronósticos retroactivos no llevan estado
@@ -131,6 +137,11 @@ la misma vela, `resolve-auto --fine-klines` mira las velas de esa vela
 (por ejemplo de 1 segundo) para ver cuál tocó primero. Si también caen en el
 mismo segundo, sigue siendo `void`. Si los datos finos no tocan ningún nivel,
 se rechaza, porque las dos fuentes no coinciden.
+
+El desempate es obligatorio: ante un empate, `resolve-auto` sin
+`--fine-klines` se rechaza, para que quien resuelve no pueda elegir entre
+anular o decidir después de ver los pronósticos. Si no hay datos finos, se
+anula a mano con `resolve --outcome void` y el motivo, que queda registrado.
 
 ```powershell
 python tools/fetch_klines.py --symbol BTCUSDT --interval 1s --lookback-hours 0 `
@@ -212,7 +223,9 @@ pregunta; NaN e infinito nunca se guardan; los argumentos JSON son en línea o
   aporta algo.
 - **Corrección por muchas comparaciones**: con `k` autores comparados a la
   vez (el enjambre cuenta), los veredictos usan el intervalo de familia al
-  `1 − 0,05/k` (Bonferroni), y `ci95` se muestra solo como referencia. Diez
+  `1 − 0,05/k` (Bonferroni), y `ci95` se muestra solo como referencia. `k`
+  cuenta cada veredicto: autores por rivales con datos (con el de volatilidad,
+  el doble). Diez
   pruebas al 95% dan en promedio un falso aprobado; así no.
 - **Enjambre** (`~enjambre`, idea de MiroFish): en cada pregunta con al menos
   dos autores (`--min-authors`), la media en log-odds de sus primeros

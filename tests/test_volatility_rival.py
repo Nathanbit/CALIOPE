@@ -113,16 +113,16 @@ class RivalFamilyTest(unittest.TestCase):
         vol = resolution["observed"]["volatility_rival"]
         self.assertTrue(vol["available"])
         pl.verify(pl.load(self.path))
-        report = fs.rival(pl.load(self.path), resamples=200)
-        self.assertEqual(report["family_size"], 3)  # nathan, ia:gemini, ~enjambre
+        report = fs.rival(pl.load(self.path), resamples=300)
+        self.assertEqual(report["family_size"], 6)  # (nathan, ia:gemini, ~enjambre) x 2 rivals
         rows = {r["author"]: r for r in report["authors"]}
         self.assertEqual(rows["nathan"]["volatility"]["rival_brier"], round((vol["p"] - 1) ** 2, 6))
         for r in rows.values():
             low, high = r["ci_family"]
             self.assertLessEqual(low, r["ci95"][0])
             self.assertGreaterEqual(high, r["ci95"][1])
-        with self.assertRaisesRegex(pl.GateError, "resamples must be at least 120"):
-            fs.rival(pl.load(self.path), resamples=110)
+        with self.assertRaisesRegex(pl.GateError, "at least 240 for 6 verdict"):
+            fs.rival(pl.load(self.path), resamples=230)
 
 
 if __name__ == "__main__":

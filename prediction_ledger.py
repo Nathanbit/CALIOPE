@@ -58,6 +58,9 @@ COMMIT = re.compile(r"[0-9a-fA-F]{7,40}")
 # never confused and each keeps its own chain and score: "ia:gemini",
 # "indicador:macroflow", "sim:mirofish", "experto:fulano". Lower case only:
 # "Gemini" and "gemini" are one author.
+# From the merge of the continuous-state feature (PR #21) every live forecast
+# must carry its thought_state; older records stay valid as they are.
+THOUGHT_REQUIRED_FROM = datetime(2026, 10, 23, 12, 18, 32, tzinfo=timezone.utc)
 AUTHOR_KINDS = ("ia", "indicador", "sim", "experto")
 AUTHOR = re.compile(r"[a-z0-9][a-z0-9_.-]{0,39}(?::[a-z0-9][a-z0-9_.-]{0,39})?")
 
@@ -246,8 +249,16 @@ def _check_forecast(state: State, record: dict, recorded: datetime) -> None:
     if "thought_state" in record:
         if record.get("sealed_evidence") is not None:
             raise GateError("backdated forecasts cannot carry a thought state")
-        if record["thought_state"] != _thought(state, qid, author):
+        stored = record["thought_state"]
+        version = stored.get("version") if isinstance(stored, dict) else None
+        import forecast_scoring as fs
+        if version not in fs.THOUGHT_VERSIONS:
+            raise GateError(f"unknown thought_state version {version!r}")
+        if stored != _thought(state, qid, author, version):
             raise GateError("thought_state does not match the ledger before this forecast")
+    elif record.get("sealed_evidence") is None and recorded >= THOUGHT_REQUIRED_FROM:
+        raise GateError("a forecast sealed now must carry its thought_state "
+                        "(only backdated forecasts with sealed evidence go without)")
     status, probability = record.get("status"), record.get("probability")
     if status == "ok":
         if isinstance(probability, bool) or not isinstance(probability, (int, float)) \
@@ -494,13 +505,14 @@ def seal(path: Path, concept: dict, author: str, probability: float | None, rati
     return {"dry_run": dry_run, "question": q_record, "forecast": f_record}
 
 
-def _thought(state: State, qid: str, author: str) -> dict | None:
+def _thought(state: State, qid: str, author: str, version: str | None = None) -> dict | None:
     import forecast_scoring as fs  # imports this module; loaded lazily to avoid a cycle
 
     question = state.questions.get(qid)
     if question is None:
         return None
-    return fs.thought_state(state, author, question.get("concept_class"))
+    return fs.thought_state(state, author, question.get("concept_class"),
+                            version=version or fs.THOUGHT_VERSION)
 
 
 def _forecast_body(qid: str, author: str, probability: float | None, rationale: str,
@@ -560,6 +572,10 @@ def resolve_auto(path: Path, qid: str, klines_path: Path, fine_path: Path | None
         data, data_sha = resolver.load_klines(klines_path)
         outcome, evidence = resolver.evaluate(question["rule"], question["horizon_end"], data)
         same_candle = outcome == "void" and "one candle" in (evidence.get("void_reason") or "")
+        if same_candle and fine_path is None:
+            raise resolver.ResolutionError(
+                "both levels were touched inside one candle: pass --fine-klines (e.g. 1s) to "
+                "order them; if finer data cannot be had, void it by hand with that reason")
         if fine_path is not None and same_candle:
             fine, fine_sha = resolver.load_klines(fine_path)
             outcome, extra = resolver.tiebreak(question["rule"], question["horizon_end"], evidence,
