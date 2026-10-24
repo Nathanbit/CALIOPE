@@ -51,12 +51,39 @@
   .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line);
           font-size: 12px; margin: 1px 2px; white-space: nowrap; }
   .big { font-size: 17px; font-weight: 600; }
+  nav.tabs { display: flex; gap: 6px; margin: 0 0 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  nav.tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+                    padding: 8px 12px; color: var(--muted); }
+  nav.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  [data-view][hidden] { display: none; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--bg); }
+  .card h3 { font-size: 14px; margin: 0 0 6px; font-weight: 600; }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--code-bg); }
+  .tag.live { background: var(--warn-bg); color: var(--warn); }
+  .tag.done { background: var(--code-bg); color: var(--ok); }
+  .num { font-variant-numeric: tabular-nums; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Panel CALIOPE</h1>
-  <p class="sub">Dicta o escribe tu predicción. El panel propone el concepto, <code>seal --dry-run</code> lo verifica y tú decides si se sella. Este panel nunca escribe en el ledger ni coloca órdenes.</p>
+  <p class="sub">Los modelos proponen, las compuertas verifican y tú decides. Este panel nunca escribe en el ledger ni coloca órdenes.</p>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="sellar" aria-selected="true">Sellar</button>
+    <button role="tab" data-tab="preguntas" aria-selected="false">Preguntas</button>
+    <button role="tab" data-tab="marcador" aria-selected="false">Marcador</button>
+  </nav>
+  <div class="row" style="margin-bottom:12px">
+    <label for="ledger" style="margin:0">Ledger</label>
+    <input id="ledger" value="projects/macroflow/predictions/ledger.jsonl" style="flex:1;min-width:220px">
+    <button id="reload">Recargar</button>
+    <span id="ledgerNote" class="muted"></span>
+  </div>
+
+  <div data-view="sellar">
 
   <section>
     <h2>1. Tu predicción</h2>
@@ -107,7 +134,6 @@
       <div><label for="source">De dónde salió ese precio</label><input id="source" placeholder="Ej.: pantalla BloFin 17:42"></div>
     </div>
     <div style="margin-top:12px"><label for="rationale">Motivo</label><input id="rationale" placeholder="Por qué lo crees"></div>
-    <div style="margin-top:12px"><label for="ledger">Ledger</label><input id="ledger" value="projects/macroflow/predictions/ledger.jsonl"></div>
   </section>
 
   <section>
@@ -115,18 +141,41 @@
     <div id="result" class="muted">Interpreta un mensaje o rellena los campos.</div>
   </section>
 
-  <section>
-    <h2>Ledger</h2>
-    <div class="row" style="margin-bottom:8px">
-      <button id="loadLedger">Cargar ledger</button>
-      <span class="muted">Lectura local del archivo. La autoridad es <code>verify</code> y <code>rival</code> en la terminal: esta vista no comprueba la cadena de hashes.</span>
-    </div>
-    <div id="ledgerView"></div>
-  </section>
+  </div>
+
+  <div data-view="preguntas" hidden>
+    <section>
+      <h2>Abiertas y por resolver</h2>
+      <div id="openView" class="cards"><span class="muted">Cargando…</span></div>
+    </section>
+    <section>
+      <h2>Resueltas</h2>
+      <div id="doneView" class="scroll"></div>
+    </section>
+  </div>
+
+  <div data-view="marcador" hidden>
+    <section>
+      <h2>Quién predice mejor</h2>
+      <p class="muted">Brier: error cuadrático medio, menor es mejor (0,25 es lanzar una moneda). Solo cuenta el primer pronóstico de cada autor en cada pregunta.</p>
+      <div id="boardView" class="scroll"></div>
+    </section>
+    <section>
+      <h2>Calibración</h2>
+      <div class="row" style="margin-bottom:8px"><select id="calAuthor" style="width:auto"></select>
+        <span class="muted">Cuando dices 70%, ¿pasa el 70% de las veces? Los puntos sobre la diagonal están bien calibrados.</span></div>
+      <div id="calView"></div>
+    </section>
+    <section>
+      <h2>Veredicto con intervalo (<code>rival</code>)</h2>
+      <div id="rivalView" class="muted"></div>
+    </section>
+  </div>
 </main>
 
 <script type="module">
 import { parseMessage, buildConcept, sealCommands, numbers, normalize } from './parse.js';
+import { parseLedger, indexLedger, scoredPairs, scoreboard, calibration, questionStatus, untilText, resolveCommands, SWARM } from './ledger.js';
 
 const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
 const $ = (id) => document.getElementById(id);
@@ -287,50 +336,136 @@ $('fetchPrice').addEventListener('click', async () => {
   render();
 });
 
-// ---------- Ledger (solo lectura) ----------
-$('loadLedger').addEventListener('click', async () => {
-  const view = $('ledgerView');
-  try {
-    const r = await fetch('../../' + $('ledger').value.trim(), { cache: 'no-store' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const records = (await r.text()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
-    view.innerHTML = ledgerHtml(records);
-  } catch (err) {
-    view.innerHTML = `<div class="msg err">No se pudo leer el ledger (${esc(err.message)}). Abre el panel desde la raíz de CALIOPE: ver tools/panel/README.md.</div>`;
-  }
-});
-
-function ledgerHtml(records) {
-  const questions = new Map(), forecasts = new Map(), resolutions = new Map();
-  for (const rec of records) {
-    if (rec.type === 'question') questions.set(rec.question_id, rec);
-    if (rec.type === 'forecast') (forecasts.get(rec.question_id) || forecasts.set(rec.question_id, []).get(rec.question_id)).push(rec);
-    if (rec.type === 'resolution') resolutions.set(rec.question_id, rec);
-  }
-  const scores = new Map();
-  const rows = [...questions.values()].reverse().map((q) => {
-    const res = resolutions.get(q.question_id);
-    const seen = new Set();
-    const fs = (forecasts.get(q.question_id) || []).sort((a, b) => a.seq - b.seq).map((f) => {
-      const first = !seen.has(f.author); seen.add(f.author);
-      if (first && res && res.outcome !== 'void' && f.status === 'ok') {
-        const y = res.outcome === 'true' ? 1 : 0;
-        const s = scores.get(f.author) || { n: 0, sum: 0 };
-        s.n += 1; s.sum += (f.probability - y) ** 2; scores.set(f.author, s);
-      }
-      return `<span class="pill">${esc(f.author)} ${f.status === 'ok' ? Math.round(f.probability * 100) + '%' : 'fallo'}</span>`;
-    }).join('');
-    const status = res ? `<b>${esc(res.outcome)}</b>` : (new Date(q.horizon_end) < new Date() ? 'por resolver' : 'abierta');
-    return `<tr><td>${esc(q.text)}</td><td>${esc(new Date(q.horizon_end).toLocaleString('es-EC'))}</td><td>${status}</td><td>${fs}</td></tr>`;
-  });
-  const board = [...scores.entries()].sort((a, b) => a[1].sum / a[1].n - b[1].sum / b[1].n)
-    .map(([a, s]) => `<tr><td>${esc(a)}</td><td>${s.n}</td><td>${(s.sum / s.n).toFixed(4)}</td></tr>`).join('');
-  return `<p class="muted">${records.length} registros · ${questions.size} preguntas · ${resolutions.size} resueltas</p>
-    <div class="scroll"><table><thead><tr><th>Pregunta</th><th>Cierra</th><th>Estado</th><th>Pronósticos</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>
-    <h2 style="margin-top:16px">Brier por autor (menor es mejor)</h2>
-    ${board ? `<div class="scroll"><table><thead><tr><th>Autor</th><th>n</th><th>Brier</th></tr></thead><tbody>${board}</tbody></table></div>
-    <p class="muted">Con menos de 30 casos no significa nada todavía. Para el veredicto con intervalo, usa <code>python prediction_ledger.py --ledger … rival</code>.</p>` : '<p class="muted">Aún no hay pronósticos resueltos.</p>'}`;
+// ---------- Pestañas ----------
+const tabs = [...document.querySelectorAll('nav.tabs button')];
+function showTab(name) {
+  tabs.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
+  document.querySelectorAll('[data-view]').forEach((v) => { v.hidden = v.dataset.view !== name; });
+  try { localStorage.setItem('caliope.tab', name); } catch { /* sin almacenamiento */ }
+  if (name !== 'sellar') loadLedger();
 }
+tabs.forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+// ---------- Ledger (solo lectura) ----------
+let ledgerIndex = null;
+async function loadLedger() {
+  const path = $('ledger').value.trim();
+  try {
+    const r = await fetch('../../' + path, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const records = parseLedger(await r.text());
+    ledgerIndex = indexLedger(records);
+    $('ledgerNote').textContent = `${records.length} registros · ${ledgerIndex.questions.size} preguntas · leído ${new Date().toLocaleTimeString('es-EC')}`;
+    renderQuestions(); renderBoard(); loadRival();
+  } catch (err) {
+    $('ledgerNote').textContent = `No se pudo leer el ledger (${err.message}). Abre el panel desde la raíz de CALIOPE: ver tools/panel/README.md.`;
+  }
+}
+$('reload').addEventListener('click', loadLedger);
+setInterval(() => { if (!document.querySelector('[data-view="sellar"]').hidden) return; loadLedger(); }, 60_000);
+
+const pct = (p) => `${Math.round(p * 100)}%`;
+const fx = (n, d = 3) => (n === null || n === undefined ? '—' : Number(n).toFixed(d));
+
+function renderQuestions() {
+  const now = new Date();
+  const ledger = $('ledger').value.trim();
+  const open = [], done = [];
+  for (const [qid, q] of ledgerIndex.questions) {
+    const res = ledgerIndex.resolutions.get(qid);
+    (res ? done : open).push({ q, res, fs: ledgerIndex.forecasts.get(qid) || [] });
+  }
+  open.sort((a, b) => new Date(a.q.horizon_end) - new Date(b.q.horizon_end));
+  $('openView').innerHTML = open.length ? open.map(({ q, fs }) => {
+    const status = questionStatus(q, null, now);
+    const when = status === 'abre pronto' ? `abre en ${untilText(q.rule.start, now)}`
+      : status === 'en curso' ? `cierra en ${untilText(q.horizon_end, now)}` : 'ya cerró: resuélvela';
+    const seen = new Set();
+    const pills = fs.filter((f) => !seen.has(f.author) && seen.add(f.author))
+      .map((f) => `<span class="pill">${esc(f.author)} <b>${f.status === 'ok' ? pct(f.probability) : 'fallo'}</b></span>`).join('');
+    const cmd = status === 'por resolver' ? resolveCommands(q, ledger) : null;
+    return `<div class="card"><span class="tag ${status === 'en curso' ? 'live' : ''}">${esc(status)}</span>
+      <h3 style="margin-top:6px">${esc(q.text)}</h3>
+      <p class="muted" style="margin:0 0 6px">${esc(when)} · cierre ${esc(new Date(q.horizon_end).toLocaleString('es-EC'))}</p>
+      <div>${pills || '<span class="muted">sin pronósticos</span>'}</div>
+      ${cmd ? `<details style="margin-top:8px"><summary>Comandos para resolver (PowerShell)</summary><pre>${esc(cmd)}</pre></details>` : ''}
+      <p class="muted" style="margin:6px 0 0"><code>${esc(q.question_id)}</code></p></div>`;
+  }).join('') : '<span class="muted">No hay preguntas abiertas. Sella una en la pestaña Sellar.</span>';
+  done.sort((a, b) => new Date(b.q.horizon_end) - new Date(a.q.horizon_end));
+  $('doneView').innerHTML = done.length ? `<table><thead><tr><th>Pregunta</th><th>Resultado</th><th>Pronósticos</th><th>Volatilidad decía</th></tr></thead><tbody>${
+    done.map(({ q, res, fs }) => {
+      const y = res.outcome === 'true' ? 1 : res.outcome === 'false' ? 0 : null;
+      const seen = new Set();
+      const pills = fs.filter((f) => !seen.has(f.author) && seen.add(f.author)).map((f) => {
+        const b = y === null || f.status !== 'ok' ? '' : ` · ${fx((f.probability - y) ** 2)}`;
+        return `<span class="pill">${esc(f.author)} ${f.status === 'ok' ? pct(f.probability) : 'fallo'}${b}</span>`;
+      }).join('');
+      const vol = res.observed?.volatility_rival;
+      return `<tr><td>${esc(q.text)}</td><td><span class="tag done">${esc(res.outcome)}</span></td><td>${pills}</td>
+        <td class="num">${vol?.available ? pct(vol.p) : '—'}</td></tr>`;
+    }).join('')}</tbody></table>` : '<span class="muted">Aún no hay preguntas resueltas.</span>';
+}
+
+function renderBoard() {
+  const pairs = scoredPairs(ledgerIndex);
+  const board = scoreboard(pairs);
+  $('boardView').innerHTML = board.length ? `<table><thead><tr><th>Autor</th><th>n</th><th>Brier</th><th>Moneda</th>
+    <th>Aciertos de lado</th><th>Brier de la volatilidad (n)</th></tr></thead><tbody>${board.map((r) => `<tr>
+    <td>${esc(r.author)}${r.author === SWARM ? ' <span class="muted">(media de todos)</span>' : ''}</td>
+    <td class="num">${r.n}</td><td class="num"><b>${fx(r.brier)}</b></td><td class="num">${fx(r.coin)}</td>
+    <td class="num">${r.hits}/${r.n}</td>
+    <td class="num">${r.volN ? `${fx(r.volBrier)} vs tuyo ${fx(r.ownOnVol)} (${r.volN})` : '—'}</td></tr>`).join('')}</tbody></table>
+    ${pairs.length < 30 ? `<p class="msg warn">Solo ${pairs.length} pronósticos puntuados: con menos de 30 el marcador todavía es ruido.</p>` : ''}`
+    : '<span class="muted">Aún no hay pronósticos resueltos.</span>';
+  const sel = $('calAuthor');
+  const keep = sel.value;
+  sel.innerHTML = board.map((r) => `<option value="${esc(r.author)}">${esc(r.author)}</option>`).join('');
+  if (board.some((r) => r.author === keep)) sel.value = keep;
+  renderCalibration(pairs);
+  sel.onchange = () => renderCalibration(pairs);
+}
+
+function renderCalibration(pairs) {
+  const author = $('calAuthor').value;
+  const rows = author ? calibration(pairs, author) : [];
+  if (!rows.length) { $('calView').innerHTML = '<span class="muted">Sin datos todavía.</span>'; return; }
+  const W = 330, P = 48, S = W - 2 * P;
+  const x = (v) => P + v * S, y = (v) => W - P - v * S;
+  const maxN = Math.max(...rows.map((r) => r.n));
+  const dots = rows.map((r) => `<circle cx="${x(r.stated)}" cy="${y(r.observed)}" r="${4 + 8 * Math.sqrt(r.n / maxN)}"
+      fill="var(--accent)" fill-opacity=".75"><title>${r.label}: dijiste ${pct(r.stated)}, pasó ${pct(r.observed)} (n=${r.n})</title></circle>`).join('');
+  const ticks = [0, 0.5, 1].map((t) => `<text x="${x(t)}" y="${W - P + 16}" text-anchor="middle">${pct(t)}</text>
+      <text x="${P - 6}" y="${y(t) + 4}" text-anchor="end">${pct(t)}</text>`).join('');
+  $('calView').innerHTML = `<svg viewBox="0 0 ${W} ${W}" width="100%" style="max-width:${W}px" role="img" aria-label="Calibración de ${esc(author)}">
+    <rect x="${P}" y="${P}" width="${S}" height="${S}" fill="none" stroke="var(--line)"/>
+    <line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="var(--muted)" stroke-dasharray="4 4"/>
+    ${dots}${ticks}
+    <text x="${W / 2}" y="${W - 6}" text-anchor="middle">dijiste</text>
+    <text x="12" y="${W / 2}" text-anchor="middle" transform="rotate(-90 12 ${W / 2})">pasó</text></svg>
+    <table style="max-width:420px"><thead><tr><th>Tramo</th><th>n</th><th>Dijiste</th><th>Pasó</th></tr></thead><tbody>${
+    rows.map((r) => `<tr><td>${r.label}</td><td class="num">${r.n}</td><td class="num">${pct(r.stated)}</td><td class="num">${pct(r.observed)}</td></tr>`).join('')}</tbody></table>`;
+}
+
+async function loadRival() {
+  const view = $('rivalView');
+  try {
+    const r = await fetch('../../state/rival.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('missing');
+    const report = await r.json();
+    const verdict = { beats_rival: 'le gana', worse_than_rival: 'pierde', undistinguished: 'sin diferencia clara', insufficient: 'faltan casos' };
+    view.innerHTML = `<table><thead><tr><th>Autor</th><th>n</th><th>vs historia</th><th>vs volatilidad</th></tr></thead><tbody>${
+      report.authors.map((a) => `<tr><td>${esc(a.author)}</td><td class="num">${a.n}</td>
+        <td>${esc(verdict[a.verdict] || a.verdict)} <span class="muted">[${a.ci_family.map((v) => fx(v)).join(', ')}]</span></td>
+        <td>${a.volatility ? `${esc(verdict[a.volatility.verdict] || a.volatility.verdict)} <span class="muted">(n=${a.volatility.n})</span>` : '—'}</td></tr>`).join('')}</tbody></table>
+      <p class="muted">Intervalo de familia al ${pct(report.family_level)} con ${report.family_size} autores. Informe de <code>state/rival.json</code>.</p>`;
+  } catch {
+    view.innerHTML = `Para ver el veredicto con intervalos, genera el informe en la terminal y recarga:<pre>python prediction_ledger.py --ledger '${esc($('ledger').value.trim())}' rival | Out-File -Encoding utf8 state\\rival.json</pre>`;
+  }
+}
+
+let initial = 'sellar';
+try { initial = localStorage.getItem('caliope.tab') || 'sellar'; } catch { /* sin almacenamiento */ }
+showTab(initial);
 </script>
 </body>
 </html>

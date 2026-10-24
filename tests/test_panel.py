@@ -13,7 +13,8 @@ class PanelParserTest(unittest.TestCase):
         node = shutil.which("node")
         if node is None:
             self.skipTest("Node no está instalado: parse.js sin verificar")
-        result = subprocess.run([node, "--test", str(ROOT / "tools" / "panel" / "parse.test.mjs")],
+        tests = [str(ROOT / "tools" / "panel" / name) for name in ("parse.test.mjs", "ledger.test.mjs")]
+        result = subprocess.run([node, "--test", *tests],
                                 capture_output=True, text=True, encoding="utf-8", timeout=120,
                                 env=dict(os.environ, TZ="America/Guayaquil"))
         self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-2000:])

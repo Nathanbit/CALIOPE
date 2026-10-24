@@ -19,6 +19,27 @@ sin eso, cualquiera en tu red podría leer la carpeta. El micrófono solo
 funciona en `127.0.0.1`/`localhost` (contexto seguro), no abriendo el archivo
 con doble clic.
 
+## Pestañas
+
+- **Sellar**: dictar o escribir, revisar campos y copiar los comandos.
+- **Preguntas**: las abiertas, con cuenta regresiva hasta que abre o cierra
+  la ventana y los pronósticos de cada autor. Las que ya cerraron traen los
+  comandos de `fetch_klines` y `resolve-auto`. Las resueltas muestran el
+  Brier de cada autor y lo que decía la volatilidad.
+- **Marcador**: Brier por autor contra la moneda y contra el rival de
+  volatilidad en las mismas preguntas, el enjambre, el gráfico de
+  calibración ("cuando dices 70%, ¿pasa el 70%?") y el veredicto con
+  intervalos de `rival`. Este último se lee de `state/rival.json`, que se
+  genera en la terminal:
+
+```powershell
+python prediction_ledger.py --ledger projects/macroflow/predictions/ledger.jsonl rival | Out-File -Encoding utf8 state\rival.json
+```
+
+La lógica de lectura (`ledger.js`) replica la de `forecast_scoring.py`: el
+primer pronóstico de cada autor puntúa, `void` no, y el enjambre es la media
+en log-odds. Se prueba con Node en `ledger.test.mjs`.
+
 ## Qué hace cada parte
 
 - **Dictar**: Whisper corre en tu navegador con Transformers.js 4.3.1; el
