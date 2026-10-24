@@ -547,7 +547,7 @@ def resolve(path: Path, qid: str, outcome: str, observed: dict, resolved_at: str
     return commit(path, build)
 
 
-def resolve_auto(path: Path, qid: str, klines_path: Path) -> dict:
+def resolve_auto(path: Path, qid: str, klines_path: Path, fine_path: Path | None = None) -> dict:
     """Resolve from observed candles with the question's own rule. The
     resolver sees only the rule and the data, never the forecasts."""
     questions, _, _ = index(load(path))
@@ -559,6 +559,14 @@ def resolve_auto(path: Path, qid: str, klines_path: Path) -> dict:
     try:
         data, data_sha = resolver.load_klines(klines_path)
         outcome, evidence = resolver.evaluate(question["rule"], question["horizon_end"], data)
+        same_candle = outcome == "void" and "one candle" in (evidence.get("void_reason") or "")
+        if fine_path is not None and same_candle:
+            fine, fine_sha = resolver.load_klines(fine_path)
+            outcome, extra = resolver.tiebreak(question["rule"], question["horizon_end"], evidence,
+                                               fine)
+            evidence = {k: v for k, v in evidence.items() if k != "void_reason"}
+            evidence.update(extra, tiebreak_data_sha256=fine_sha,
+                            tiebreak_data_fetched_at=fine.get("fetched_at"))
     except (OSError, resolver.ResolutionError) as exc:
         raise GateError(f"automatic resolution refused: {exc}") from exc
     if _seconds(parse_time(data.get("fetched_at"), "fetched_at"), now_utc()) > CLOCK_SKEW_SECONDS:
@@ -698,7 +706,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("resolve-auto")
     p.add_argument("--question", required=True)
     p.add_argument("--klines", required=True, type=Path)
-    p.set_defaults(run=lambda a: resolve_auto(a.ledger, a.question, a.klines))
+    p.add_argument("--fine-klines", type=Path,
+                   help="finer candles (e.g. 1s) to break a touch_first tie inside one candle")
+    p.set_defaults(run=lambda a: resolve_auto(a.ledger, a.question, a.klines, a.fine_klines))
     sub.add_parser("score").set_defaults(run=_read_only(fs.score))
     p = sub.add_parser("rival", help="each author against a rival that only knows the past")
     p.add_argument("--resamples", type=int, default=2000)

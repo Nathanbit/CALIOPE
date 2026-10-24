@@ -115,6 +115,31 @@ símbolo o el intervalo no coinciden, si hay precios inválidos o si la regla no
 está alineada a las velas. Datos que faltan nunca se leen como "no pasó nada".
 `fetch_klines.py` solo usa la API pública de Binance: sin claves ni cuenta.
 
+### Velas de segundos y desempate
+
+Además de minutos y horas, las reglas aceptan `1s`, `5s`, `10s`, `15s` y
+`30s`. Binance sirve velas de 1 segundo; las de 5 a 30 segundos las arma
+`fetch_klines.py` agrupando las de 1 segundo, de forma determinista
+(apertura, máximo, mínimo, cierre y volumen de cada grupo). Un grupo al que
+le falta un segundo se omite, y el resolutor falla por falta de cobertura:
+un segundo sin dato es desconocido, no "no pasó nada".
+
+Para las preguntas de **toca**, las velas finas no cambian el resultado: el
+mínimo o máximo de una vela de 1 minuto ya incluye cada operación de ese
+minuto. Sirven para **desempatar `touch_first`**: si los dos niveles caen en
+la misma vela, `resolve-auto --fine-klines` mira las velas de esa vela
+(por ejemplo de 1 segundo) para ver cuál tocó primero. Si también caen en el
+mismo segundo, sigue siendo `void`. Si los datos finos no tocan ningún nivel,
+se rechaza, porque las dos fuentes no coinciden.
+
+```powershell
+python tools/fetch_klines.py --symbol BTCUSDT --interval 1s --lookback-hours 0 `
+  --start <inicio de la vela empatada> --end <fin de esa vela> `
+  --out projects/macroflow/predictions/data/BTCUSDT_1s_desempate.json
+python prediction_ledger.py --ledger $L resolve-auto --question q-... `
+  --klines <velas de la regla> --fine-klines projects/macroflow/predictions/data/BTCUSDT_1s_desempate.json
+```
+
 `fetch_klines.py` descarga además las 24 horas anteriores al inicio
 (`--lookback-hours`, por defecto 24). El resolutor las ignora para decidir el
 resultado, pero `resolve-auto` las usa para guardar en la resolución el

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.24.0 — 2026-10-24
+
+Velas de segundos y desempate de `touch_first`. Resolutor 1.2.
+
+- Intervalos `1s`, `5s`, `10s`, `15s` y `30s`. `fetch_klines.py` baja 1s
+  de Binance y arma 5s-30s con `resolver.aggregate`, determinista. Un grupo
+  incompleto se omite, así que el resolutor falla cerrado.
+- `resolve-auto --fine-klines`: si los dos niveles de un `touch_first`
+  caen en la misma vela, decide la primera vela fina que toca uno de ellos.
+  Si se repite el empate, sigue `void`; si los datos finos no tocan ningún
+  nivel, se rechaza. La resolución guarda el hash de los datos finos.
+- 9 tests nuevos.
+
 ## 0.23.0 — 2026-10-24
 
 La pregunta on-chain en el laboratorio causal: ¿los datos de la red
