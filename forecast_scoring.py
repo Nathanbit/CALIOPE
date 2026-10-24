@@ -136,8 +136,9 @@ def by_concept(pairs: list[dict]) -> list[dict]:
     rows = []
     for label in sorted({x["concept_class"] for x in pairs if x["concept_class"]}):
         group = [x for x in pairs if x["concept_class"] == label]
-        rows.append({"concept_class": label, "n": len(group),
-                     "observed_rate": sum(x["y"] for x in group) / len(group),
+        outcomes = {x["question_id"]: x["y"] for x in group}  # one vote per question
+        rows.append({"concept_class": label, "n": len(outcomes), "forecasts": len(group),
+                     "observed_rate": sum(outcomes.values()) / len(outcomes),
                      "brier": brier(group),
                      "authors": {a: brier([x for x in group if x["author"] == a])
                                  for a in sorted({x["author"] for x in group})}})
@@ -226,11 +227,16 @@ def score_lessons(records: list[dict], min_n: int = 30, margin: float = 0.01) ->
             "lessons": report}
 
 
-THOUGHT_VERSION = "1.0"
+THOUGHT_VERSION = "1.1"
+# 1.0 counted the class history per forecast, so a question with four authors
+# weighed four times; 1.1 counts each question once. verify recomputes every
+# stored state with the version it was written with.
+THOUGHT_VERSIONS = ("1.0", "1.1")
 
 
 def thought_state(state: "pl.State", author: str, concept_class: str | None,
-                  bins: int = 5, prior_strength: float = 20.0) -> dict:
+                  bins: int = 5, prior_strength: float = 20.0,
+                  version: str = THOUGHT_VERSION) -> dict:
     """The author's continuous state at a point of the ledger.
 
     Idea adapted from Meta FAIR's Coconut (Chain of Continuous Thought,
@@ -251,8 +257,12 @@ def thought_state(state: "pl.State", author: str, concept_class: str | None,
         calibration.append({"bin": _bin_label(key, bins), "n": n, "stated": round(stated, 6),
                             "shrunk_freq": round((hits + prior_strength * stated)
                                                  / (n + prior_strength), 6)})
+    if version not in THOUGHT_VERSIONS:
+        raise ValueError(f"unknown thought_state version {version}")
     same_class = [x for x in pairs if concept_class and x["concept_class"] == concept_class]
     own_class = [x for x in same_class if x["author"] == author]
+    if version != "1.0":
+        same_class = list({x["question_id"]: x for x in same_class}.values())
     previous = [r for items in state.forecasts.values() for r in items if r["author"] == author]
     lessons = sorted(lid for lid, entry in state.lessons.items()
                      if pl.lesson_status(entry) == "adopted"
@@ -260,7 +270,7 @@ def thought_state(state: "pl.State", author: str, concept_class: str | None,
 
     def rounded(value: float | None) -> float | None:
         return None if value is None else round(value, 6)
-    return {"version": THOUGHT_VERSION, "author": author, "n": len(own),
+    return {"version": version, "author": author, "n": len(own),
             "brier": rounded(brier(own)), "calibration": calibration,
             "concept_class": concept_class, "class_n": len(same_class),
             "class_observed_rate": rounded(sum(x["y"] for x in same_class) / len(same_class)
@@ -397,19 +407,21 @@ def rival(records: list[dict], resamples: int = 2000, seed: int = 0, min_n: int 
     Paired Brier difference (rival minus author: positive means the author is
     better), with a percentile bootstrap over questions and a fixed seed.
     Comparing many authors at once makes a lucky pass likely, so verdicts use
-    a Bonferroni family interval at 1 - 0.05/k, with k the authors compared;
+    a Bonferroni family interval at 1 - 0.05/k, with k the verdicts given
+    (authors times rivals with data);
     ``ci95`` is shown for reference only. The swarm (``~enjambre``) counts as
     one more author."""
     pairs, _ = scored_pairs(records)
     pairs = pairs + swarm_pairs(pairs, min_authors)
     authors = sorted({x["author"] for x in pairs})
-    family = max(1, len(authors))
+    rivals = {"history": _rival_probabilities(records, pairs),
+              "volatility": _volatility_probabilities(records, pairs)}
+    # Every verdict is one test: authors x rivals that have data.
+    family = max(1, len(authors) * (2 if rivals["volatility"] else 1))
     alpha = 0.05 / family
     if resamples < 100 or resamples * alpha / 2 < 1:
         raise pl.GateError(f"resamples must be at least {max(100, math.ceil(2 / alpha))} "
-                           f"for {family} author(s)")
-    rivals = {"history": _rival_probabilities(records, pairs),
-              "volatility": _volatility_probabilities(records, pairs)}
+                           f"for {family} verdict(s)")
     rng = random.Random(seed)
     board = []
     for author in authors:
