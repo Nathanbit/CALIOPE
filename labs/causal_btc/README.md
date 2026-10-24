@@ -53,6 +53,20 @@ python labs/causal_btc/evaluate.py --hypotheses labs/causal_btc/hypotheses/<arch
 | `btc`, `eth` | Binance, velas diarias (cierre a las 00:00 UTC) |
 | `btc_funding` | Binance perpetuo USDT-M, media diaria del funding |
 | `ndx`, `spx`, `gold`, `us10y` | Stooq, CSV diario |
+| `hashrate` | mempool.space, hashrate diario de la red |
+| `fees` | mempool.space, comisiones medias por bloque del día |
+
+### La pregunta on-chain
+
+¿Los datos de la propia red (hashrate y comisiones) anticipan el precio, o
+solo lo siguen? Se responde igual que el resto: si `discover.py` encuentra
+"hashrate o fees en t−k → btc en t" y se sostiene en el holdout, anticipan.
+Lo esperable es lo contrario: que el precio mueva a los mineros y a la
+demanda de espacio en bloques, y no al revés.
+
+mempool.space fecha cada hashrate diario a la medianoche en que **termina**
+el día medido. `fetch_series.py` lo fecha por el día que mide; fecharlo un
+día antes metería el futuro en el experimento.
 
 Si una fuente no responde, su columna queda fuera y se informa el motivo.
 Faltan los flujos de los ETF de bitcoin: no hay una fuente pública y estable

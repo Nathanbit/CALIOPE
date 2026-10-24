@@ -14,6 +14,8 @@ its source does not answer):
 | btc, eth | Binance spot daily klines (close, candle closing 00:00 UTC) |
 | btc_funding | Binance USDT-M perpetual funding rate, daily mean |
 | ndx, spx, gold, us10y | Stooq daily CSV (^ndx, ^spx, xauusd, 10usy.b) |
+| hashrate | mempool.space, daily network hashrate (dated by the day it measures) |
+| fees | mempool.space, mean fees per block that day (sats) |
 
 Timing: a stock close for day D (about 20:00-21:00 UTC) is known before the
 BTC candle of day D+1 opens, so "X at t-1 -> btc at t" uses only past data.
@@ -91,6 +93,34 @@ def binance_funding(symbol: str, start_ms: int, end_ms: int) -> dict[str, float]
     return {d: sum(v) / len(v) for d, v in sums.items()}
 
 
+MEMPOOL = "https://mempool.space/api/v1/mining"
+
+
+def mempool_hashrate() -> dict[str, float]:
+    """Daily hashrate. mempool.space stamps each value at the midnight that
+    *ends* the day it measures (blocks from midnight-24h to midnight), so it is
+    dated by ``timestamp - 1 s``. Dating it by the timestamp itself would be
+    harmless (a day late); dating it a day early would leak the future."""
+    data = json.loads(get(f"{MEMPOOL}/hashrate/all"))
+    rows = data.get("hashrates") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(f"unexpected answer: {str(data)[:200]}")
+    return {day((int(r["timestamp"]) - 1) * 1000): float(r["avgHashrate"])
+            for r in rows if float(r["avgHashrate"]) > 0}
+
+
+def mempool_fees() -> dict[str, float]:
+    """Mean total fees per block in each UTC day (daily buckets for 'all')."""
+    rows = json.loads(get(f"{MEMPOOL}/blocks/fees/all"))
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(f"unexpected answer: {str(rows)[:200]}")
+    by_day: dict[str, list[float]] = {}
+    for r in rows:
+        if float(r["avgFees"]) > 0:
+            by_day.setdefault(day(int(r["timestamp"]) * 1000), []).append(float(r["avgFees"]))
+    return {d: sum(v) / len(v) for d, v in by_day.items()}
+
+
 def stooq_closes(symbol: str) -> dict[str, float]:
     text = get(f"https://stooq.com/q/d/l/?s={urllib.parse.quote(symbol)}&i=d").decode("utf-8")
     rows = list(csv.DictReader(io.StringIO(text)))
@@ -108,6 +138,7 @@ def build(start: str, end: str | None = None) -> tuple[list[dict], dict]:
                 "eth": lambda: binance_closes("ETHUSDT", start_ms, end_ms),
                 "btc_funding": lambda: binance_funding("BTCUSDT", start_ms, end_ms)}
     fetchers.update({name: (lambda s=sym: stooq_closes(s)) for name, sym in STOOQ.items()})
+    fetchers.update({"hashrate": mempool_hashrate, "fees": mempool_fees})
     columns, report = {}, {}
     for name, fetch in fetchers.items():
         try:

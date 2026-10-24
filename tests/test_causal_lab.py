@@ -122,6 +122,21 @@ class FetchTest(unittest.TestCase):
             closes = fetch_series.binance_closes("BTCUSDT", start, start + 2 * day)
         self.assertEqual(closes, {"2026-01-01": 100.0, "2026-01-02": 101.0})
 
+    def test_mempool_series_are_dated_by_the_day_they_measure(self):
+        hashrate = json.dumps({"hashrates": [
+            {"timestamp": 1767312000, "avgHashrate": 9.1e20},   # 2026-01-02T00:00Z ends Jan 1
+            {"timestamp": 1767398400, "avgHashrate": 0}],       # zero is dropped, not kept
+            "difficulty": []}).encode()
+        with mock.patch.object(fetch_series, "get", return_value=hashrate):
+            self.assertEqual(fetch_series.mempool_hashrate(), {"2026-01-01": 9.1e20})
+        fees = json.dumps([{"avgHeight": 930000, "timestamp": 1767268800, "avgFees": 4000000},
+                           {"avgHeight": 930144, "timestamp": 1767355200, "avgFees": 5000000}]).encode()
+        with mock.patch.object(fetch_series, "get", return_value=fees):
+            self.assertEqual(fetch_series.mempool_fees(), {"2026-01-01": 4e6, "2026-01-02": 5e6})
+        with mock.patch.object(fetch_series, "get", return_value=b'{"error": "x"}'):
+            with self.assertRaisesRegex(ValueError, "unexpected"):
+                fetch_series.mempool_hashrate()
+
     def test_a_failing_source_is_reported_not_filled(self):
         def fake(url):
             if "stooq" in url:
