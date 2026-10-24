@@ -70,9 +70,15 @@ sin claves.
 - Si nada se sostiene, es el resultado esperado, y también vale: ahorra
   operar con una señal falsa.
 
+## Verificado
+
+Con causal-ts 0.27.0 y PyTorch en CPU, sobre 900 días sintéticos con una
+única relación real (Nasdaq de ayer → BTC de hoy), un S&P 500 parecido al
+Nasdaq pero sin efecto propio, y ruido: `discover.py` encontró solo
+`ndx` con retraso 1, y `evaluate.py` la sostuvo en el holdout (r = 0,61,
+dirección acertada el 69% de los días, p = 0,0005). Tarda unos segundos.
+
 ## Sin verificar
 
 - La descarga contra Binance y Stooq reales (el entorno del agente no llega
   a esos sitios).
-- Las pruebas usan datos sintéticos: una relación real que debe sostenerse y
-  ruido que no.

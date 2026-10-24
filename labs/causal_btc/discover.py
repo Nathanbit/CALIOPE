@@ -55,7 +55,12 @@ def discover(data_path: Path, holdout_days: int, max_lag: int, alpha: float) -> 
             edge = {"cause": name, "lag": lag, "sign": 1 if r >= 0 else -1,
                     "discovery_r": round(r, 4),
                     "pvalue": float(result.pvalue_matrix[cause, target, lag])}
-            (autoregressive if cause == target else edges).append(edge)
+            if cause == target:
+                # CEDAR keeps self-loops by default (include_autoreg); keep only significant ones
+                if edge["pvalue"] < alpha:
+                    autoregressive.append(edge)
+            else:
+                edges.append(edge)
     return {"data": data_path.resolve().relative_to(ROOT).as_posix(),
             "data_sha256": series.file_sha256(data_path), "holdout_days": holdout_days,
             "discovery": [discovery["dates"][0], discovery["dates"][-1]],
