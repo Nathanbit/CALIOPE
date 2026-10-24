@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.23.0 — 2026-10-24
+
+La pregunta on-chain en el laboratorio causal: ¿los datos de la red
+anticipan el precio o solo lo siguen?
+
+- `fetch_series.py` añade `hashrate` y `fees` de la API pública de
+  mempool.space, sin claves (la fuente de JamesANZ/bitcoin-mcp, sin instalar
+  ese paquete). El hashrate se fecha por el día que mide: mempool.space lo
+  sella a la medianoche en que termina ese día, y fecharlo un día antes
+  metería el futuro en el experimento.
+- Formato verificado en el código de mempool/mempool
+  (`mining-routes.ts`, `HashratesRepository.ts`, `BlocksRepository.ts`).
+- 1 test nuevo.
+
 ## 0.22.0 — 2026-10-24
 
 Laboratorio causal (`labs/causal_btc/`), aparte del núcleo.
