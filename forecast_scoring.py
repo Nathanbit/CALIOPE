@@ -331,45 +331,98 @@ def _rival_probabilities(records: list[dict],
     return out
 
 
+def _volatility_probabilities(records: list[dict], pairs: list[dict]) -> dict[tuple[str, str], float]:
+    """The volatility rival stored by ``resolve-auto``: computed only from
+    candles that closed before the window, so it never saw the outcome."""
+    _, _, resolutions = pl.index(records)
+    out = {}
+    for x in pairs:
+        vol = (resolutions[x["question_id"]].get("observed") or {}).get("volatility_rival") or {}
+        if vol.get("available") and isinstance(vol.get("p"), (int, float)):
+            out[(x["question_id"], x["author"])] = float(vol["p"])
+    return out
+
+
+def _interval(means: list[float], alpha: float) -> tuple[float, float]:
+    k = len(means)
+    low = means[max(0, math.floor(alpha / 2 * k))]
+    high = means[min(k - 1, math.ceil((1 - alpha / 2) * k) - 1)]
+    return low, high
+
+
+def _verdict(n: int, min_n: int, low: float, high: float) -> str:
+    if n < min_n:
+        return "insufficient"
+    if low > 0:
+        return "beats_rival"
+    if high < 0:
+        return "worse_than_rival"
+    return "undistinguished"
+
+
+def _compare(own: list[dict], rival_p: dict, author: str, rng: random.Random, resamples: int,
+             alpha: float, min_n: int) -> dict | None:
+    """Paired Brier advantage over one rival, on the questions it covers."""
+    covered = [x for x in own if (x["question_id"], author) in rival_p]
+    if not covered:
+        return None
+    diffs = [(rival_p[(x["question_id"], author)] - x["y"]) ** 2 - (x["p"] - x["y"]) ** 2
+             for x in covered]
+    n = len(diffs)
+    means = sorted(sum(rng.choice(diffs) for _ in range(n)) / n for _ in range(resamples))
+    low95, high95 = _interval(means, 0.05)
+    low, high = _interval(means, alpha)
+    rival_brier = brier([dict(x, p=rival_p[(x["question_id"], author)]) for x in covered])
+    own_brier = brier(covered)
+    return {"n": n, "brier": round(own_brier, 6), "rival_brier": round(rival_brier, 6),
+            "skill": None if rival_brier == 0 else round(1 - own_brier / rival_brier, 6),
+            "mean_advantage": round(sum(diffs) / n, 6),
+            "ci95": [round(low95, 6), round(high95, 6)],
+            "ci_family": [round(low, 6), round(high, 6)],
+            "verdict": _verdict(n, min_n, low, high)}
+
+
 def rival(records: list[dict], resamples: int = 2000, seed: int = 0, min_n: int = 30,
           min_authors: int = 2) -> dict:
-    """Does each author beat the base rival on the same questions?
+    """Does each author beat the rivals on the same questions?
 
-    Paired Brier difference (rival minus author: positive means the author
-    is better), with a percentile bootstrap interval over questions. The
-    seed is fixed so the report is reproducible. ``verdict`` stays
-    ``insufficient`` below ``min_n`` and ``undistinguished`` while the 95%
-    interval contains zero: a lucky streak is not skill. The swarm
-    (``~enjambre``) is scored the same way when questions have several authors."""
-    if resamples < 100:
-        raise pl.GateError("resamples must be at least 100")
+    Two rivals, from the easiest to the nearest known effect (a lesson from
+    bhoult/correlation: "beat the nearest known effect, not just random"):
+
+    - ``history``: the class's outcome rate before each forecast.
+    - ``volatility``: what the volatility before the window says
+      (``resolver.volatility_rival``), on questions resolved automatically
+      with enough earlier candles.
+
+    Paired Brier difference (rival minus author: positive means the author is
+    better), with a percentile bootstrap over questions and a fixed seed.
+    Comparing many authors at once makes a lucky pass likely, so verdicts use
+    a Bonferroni family interval at 1 - 0.05/k, with k the authors compared;
+    ``ci95`` is shown for reference only. The swarm (``~enjambre``) counts as
+    one more author."""
     pairs, _ = scored_pairs(records)
     pairs = pairs + swarm_pairs(pairs, min_authors)
-    rival_p = _rival_probabilities(records, pairs)
+    authors = sorted({x["author"] for x in pairs})
+    family = max(1, len(authors))
+    alpha = 0.05 / family
+    if resamples < 100 or resamples * alpha / 2 < 1:
+        raise pl.GateError(f"resamples must be at least {max(100, math.ceil(2 / alpha))} "
+                           f"for {family} author(s)")
+    rivals = {"history": _rival_probabilities(records, pairs),
+              "volatility": _volatility_probabilities(records, pairs)}
     rng = random.Random(seed)
     board = []
-    for author in sorted({x["author"] for x in pairs}):
+    for author in authors:
         own = [x for x in pairs if x["author"] == author]
-        diffs = [(rival_p[(x["question_id"], author)] - x["y"]) ** 2 - (x["p"] - x["y"]) ** 2
-                 for x in own]
-        n = len(diffs)
-        mean = sum(diffs) / n
-        means = sorted(sum(rng.choice(diffs) for _ in range(n)) / n for _ in range(resamples))
-        low, high = means[int(0.025 * resamples)], means[int(0.975 * resamples) - 1]
-        rival_brier = brier([dict(x, p=rival_p[(x["question_id"], author)]) for x in own])
-        if n < min_n:
-            verdict = "insufficient"
-        elif low > 0:
-            verdict = "beats_rival"
-        elif high < 0:
-            verdict = "worse_than_rival"
-        else:
-            verdict = "undistinguished"
-        board.append({"author": author, "n": n, "brier": round(brier(own), 6),
-                      "rival_brier": round(rival_brier, 6),
-                      "skill": None if rival_brier == 0 else round(1 - brier(own) / rival_brier, 6),
-                      "mean_advantage": round(mean, 6),
-                      "ci95": [round(low, 6), round(high, 6)], "verdict": verdict})
-    return {"rival": "class history before each forecast, shrunk to 0.5 "
-                     f"(prior {RIVAL_PRIOR})", "resamples": resamples, "seed": seed,
-            "min_n": min_n, "authors": board, "evidence_type": "derivation"}
+        history = _compare(own, rivals["history"], author, rng, resamples, alpha, min_n)
+        row = dict(history, author=author)
+        row["volatility"] = _compare(own, rivals["volatility"], author, rng, resamples, alpha,
+                                     min_n)
+        board.append(row)
+    return {"rivals": {"history": "class history before each forecast, shrunk to 0.5 "
+                                  f"(prior {RIVAL_PRIOR})",
+                       "volatility": "driftless random walk with the volatility of the 24 h "
+                                     "before the window (resolve-auto)"},
+            "family_size": family, "family_level": round(1 - alpha, 6),
+            "resamples": resamples, "seed": seed, "min_n": min_n, "authors": board,
+            "evidence_type": "derivation"}

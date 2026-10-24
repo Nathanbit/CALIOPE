@@ -116,6 +116,24 @@ def load_klines(path: Path) -> tuple[dict, str]:
     return data, hashlib.sha256(raw).hexdigest()
 
 
+def _parse_row(row: object) -> tuple[dict, int]:
+    """One Binance kline row, with consistent positive prices, or raise."""
+    if not isinstance(row, list) or len(row) < 7:
+        raise ResolutionError("malformed kline row: expected a list with open and close times")
+    try:
+        open_ms, close_ms = int(row[0]), int(row[6])
+        candle = {"open_ms": open_ms, "open": float(row[1]), "high": float(row[2]),
+                  "low": float(row[3]), "close": float(row[4])}
+    except (TypeError, ValueError) as exc:
+        raise ResolutionError("malformed kline row") from exc
+    prices = ("open", "high", "low", "close")
+    if not all(math.isfinite(candle[k]) and candle[k] > 0 for k in prices) \
+            or candle["low"] > min(candle["open"], candle["close"]) \
+            or candle["high"] < max(candle["open"], candle["close"]):
+        raise ResolutionError(f"inconsistent prices in candle {iso_ms(open_ms)}")
+    return candle, close_ms
+
+
 def _candles(data: dict, rule: dict, horizon_end: str) -> list[dict]:
     if str(data.get("symbol", "")).upper() != rule["symbol"]:
         raise ResolutionError("klines symbol does not match the rule")
@@ -128,19 +146,8 @@ def _candles(data: dict, rule: dict, horizon_end: str) -> list[dict]:
         raise ResolutionError("data was fetched before horizon_end: the window was still open")
     rows: dict[int, dict] = {}
     for row in data["klines"]:
-        if not isinstance(row, list) or len(row) < 7:
-            raise ResolutionError("malformed kline row: expected a list with open and close times")
-        try:
-            open_ms, close_ms = int(row[0]), int(row[6])
-            candle = {"open_ms": open_ms, "open": float(row[1]), "high": float(row[2]),
-                      "low": float(row[3]), "close": float(row[4])}
-        except (TypeError, ValueError) as exc:
-            raise ResolutionError("malformed kline row") from exc
-        prices = ("open", "high", "low", "close")
-        if not all(math.isfinite(candle[k]) and candle[k] > 0 for k in prices) \
-                or candle["low"] > min(candle["open"], candle["close"]) \
-                or candle["high"] < max(candle["open"], candle["close"]):
-            raise ResolutionError(f"inconsistent prices in candle {iso_ms(open_ms)}")
+        candle, close_ms = _parse_row(row)
+        open_ms = candle["open_ms"]
         if not start <= open_ms < end:
             continue
         if open_ms in rows:
@@ -154,6 +161,74 @@ def _candles(data: dict, rule: dict, horizon_end: str) -> list[dict]:
         raise ResolutionError(f"data does not cover the window: {len(missing)} candle(s) missing, "
                               f"first {iso_ms(missing[0])}")
     return [rows[t] for t in expected]
+
+
+VOLATILITY_VERSION = "1.0"
+LOOKBACK_MS = 24 * 3_600_000
+MIN_RETURNS = 30
+
+
+def _phi(x: float) -> float:
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+def volatility_rival(rule: dict, horizon_end: str, data: dict,
+                     lookback_ms: int = LOOKBACK_MS) -> dict:
+    """What volatility alone says, using only candles that closed before the
+    window started (so no outcome can leak in).
+
+    Model: the log price is a driftless random walk with the per-candle
+    volatility of the lookback. ``touch``: reflection principle,
+    P = 2 * (1 - Phi(d / (sigma * sqrt(N)))), d the log distance to the level
+    and N the candles in the window. ``close_beyond`` uses the same formula,
+    an upper bound because closes are sampled once per candle.
+    ``touch_first``: P(lower first | one is hit) = ln(U/S) / ln(U/L), as void
+    outcomes are never scored. Volatility is measured per candle, so there is
+    no annualization (and no 252-day trap for a market that trades every day).
+    Fails closed: with gaps or fewer than ``MIN_RETURNS`` returns it reports
+    ``available: false`` instead of guessing."""
+    rule = validate_rule(rule, horizon_end)
+    step = INTERVAL_MS[rule["interval"]]
+    start, end = to_ms(rule["start"], "rule.start"), to_ms(horizon_end, "horizon_end")
+    rows: dict[int, float] = {}
+    for row in data.get("klines", []):
+        candle, close_ms = _parse_row(row)
+        open_ms = candle["open_ms"]
+        if start - lookback_ms <= open_ms < start and close_ms == open_ms + step - 1:
+            if open_ms in rows:
+                raise ResolutionError(f"duplicate candle {iso_ms(open_ms)}")
+            rows[open_ms] = candle["close"]
+    expected = list(range(start - lookback_ms, start, step))
+    closes = [rows[t] for t in expected if t in rows]
+    base = {"available": False, "version": VOLATILITY_VERSION, "lookback_candles": len(closes)}
+    if len(closes) != len(expected):
+        return dict(base, reason=f"{len(expected) - len(closes)} candle(s) missing before the "
+                                 "window: fetch with --lookback-hours 24")
+    returns = [math.log(b / a) for a, b in zip(closes, closes[1:])]
+    if len(returns) < MIN_RETURNS:
+        return dict(base, reason=f"only {len(returns)} returns before the window")
+    mean = sum(returns) / len(returns)
+    sigma = math.sqrt(sum((r - mean) ** 2 for r in returns) / (len(returns) - 1))
+    if sigma == 0:
+        return dict(base, reason="zero volatility before the window")
+    spot, n = closes[-1], (end - start) // step
+    scale = sigma * math.sqrt(n)
+    if rule["kind"] == "touch_first":
+        lower, upper = rule["lower"], rule["upper"]
+        if not lower < spot < upper:
+            return dict(base, reason="the last close before the window is outside the levels")
+        p_lower = math.log(upper / spot) / math.log(upper / lower)
+        p = p_lower if rule["true_if"] == "lower_first" else 1 - p_lower
+    else:
+        level = rule["level"]
+        down = rule["side"] in ("at_or_below", "below")
+        distance = math.log(spot / level) if down else math.log(level / spot)
+        p = 1.0 if distance <= 0 else 2 * (1 - _phi(distance / scale))
+    p = min(max(p, 0.001), 0.999)
+    return {"available": True, "version": VOLATILITY_VERSION, "p": round(p, 6),
+            "sigma_per_candle": round(sigma, 8), "lookback_candles": len(closes),
+            "window_candles": n, "reference_close": spot,
+            "model": "driftless log random walk, reflection principle"}
 
 
 def evaluate(rule: dict, horizon_end: str, data: dict) -> tuple[str, dict]:

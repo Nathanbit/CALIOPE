@@ -563,9 +563,14 @@ def resolve_auto(path: Path, qid: str, klines_path: Path) -> dict:
         raise GateError(f"automatic resolution refused: {exc}") from exc
     if _seconds(parse_time(data.get("fetched_at"), "fetched_at"), now_utc()) > CLOCK_SKEW_SECONDS:
         raise GateError("klines fetched_at is in the future")
+    try:
+        volatility = resolver.volatility_rival(question["rule"], question["horizon_end"], data)
+    except resolver.ResolutionError as exc:
+        volatility = {"available": False, "reason": str(exc)}
     observed = dict(evidence, source=f"klines file ({data.get('source', 'unknown source')})",
                     data_sha256=data_sha, data_fetched_at=data.get("fetched_at"),
-                    resolver="resolver.py", resolver_version=resolver.RESOLVER_VERSION)
+                    resolver="resolver.py", resolver_version=resolver.RESOLVER_VERSION,
+                    volatility_rival=volatility)
     return resolve(path, qid, outcome, observed, void_reason=evidence.get("void_reason"),
                    method="auto")
 
