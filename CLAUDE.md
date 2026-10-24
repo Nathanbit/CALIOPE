@@ -16,6 +16,7 @@
 | `evidence_io.py` | Primitivas comunes: JSON canónico, lectura estricta, escritura atómica, bloqueo, fechas y manifiestos `sha256sum` |
 | `contracts/`, `workflows/` | Esquemas JSON y contratos de revisión por proyecto |
 | `tools/verify.py` | Comprobaciones según lo que cambió |
+| `evals/predict/`, `tools/eval_predict.py` | Casos fijos mensaje → concepto y su calificación determinista |
 | `tools/panel/` | Panel local: dictar o escribir una predicción → concepto → comandos de `seal`; vista del ledger. No escribe en el ledger |
 | `projects/macroflow/` | Primer caso de uso: Pine y evidencia congelados en `MANIFEST.sha256`, predicciones en `predictions/` |
 | `archive/` | Piezas retiradas (themis, réplica Python, disciplina); sin mantenimiento, ver `archive/README.md` |

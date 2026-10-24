@@ -115,6 +115,25 @@ símbolo o el intervalo no coinciden, si hay precios inválidos o si la regla no
 está alineada a las velas. Datos que faltan nunca se leen como "no pasó nada".
 `fetch_klines.py` solo usa la API pública de Binance: sin claves ni cuenta.
 
+`fetch_klines.py` descarga además las 24 horas anteriores al inicio
+(`--lookback-hours`, por defecto 24). El resolutor las ignora para decidir el
+resultado, pero `resolve-auto` las usa para guardar en la resolución el
+**rival de volatilidad**: la probabilidad que daba la volatilidad sola, con
+velas que cerraron antes de la ventana, sin acceso al resultado.
+
+- `touch`: principio de reflexión de un paseo aleatorio sin deriva,
+  `P = 2·(1 − Φ(d / (σ·√N)))`, donde `d` es la distancia logarítmica al nivel,
+  `σ` la volatilidad por vela y `N` las velas de la ventana.
+- `close_beyond`: la misma fórmula. Es una cota superior, porque el cierre se
+  mira una vez por vela.
+- `touch_first`: `ln(U/S) / ln(U/L)`, la ruina del jugador. Es condicional a
+  que se toque alguno; los `void` no se puntúan.
+
+La volatilidad es por vela, así que no se anualiza y no cae en la trampa de
+los 252 días bursátiles en un mercado que cotiza todos los días. Si faltan
+velas anteriores, la resolución guarda `available: false` con el motivo y no
+inventa nada.
+
 ## Compuertas (fallo cerrado, código de salida 2)
 
 Todas las reglas viven en una sola función (`check`) que usan los comandos que
@@ -160,6 +179,16 @@ pregunta; NaN e infinito nunca se guardan; los argumentos JSON son en línea o
   veredicto es `beats_rival` o `worse_than_rival` solo si el intervalo
   excluye el cero y hay al menos 30 casos; si no, `undistinguished` o
   `insufficient`. Una racha de suerte no es habilidad.
+- **Segundo rival, la volatilidad** (campo `volatility` de cada autor): en
+  las preguntas resueltas con `resolve-auto` y velas previas, cada autor se
+  compara también con lo que decía la volatilidad sola. Es el "efecto
+  conocido más cercano" para predicciones de toques de precio. Ganarle a la
+  historia es fácil; ganarle a la volatilidad demuestra que el análisis
+  aporta algo.
+- **Corrección por muchas comparaciones**: con `k` autores comparados a la
+  vez (el enjambre cuenta), los veredictos usan el intervalo de familia al
+  `1 − 0,05/k` (Bonferroni), y `ci95` se muestra solo como referencia. Diez
+  pruebas al 95% dan en promedio un falso aprobado; así no.
 - **Enjambre** (`~enjambre`, idea de MiroFish): en cada pregunta con al menos
   dos autores (`--min-authors`), la media en log-odds de sus primeros
   pronósticos válidos, recortados a [0.01, 0.99]. Es una derivación que no
@@ -298,6 +327,18 @@ Ningún código se copió; las ideas se reimplementaron desde cero:
   copió nada): motor de predicción por enjambre de agentes. Su README no
   incluye cómo medir los aciertos; CALIOPE lo trata como un autor más
   (`sim:`) para medirlo.
+- [bhoult/correlation](https://github.com/bhoult/correlation) (GPL-3.0, no se
+  copió nada): 65 experimentos que no le ganan al azar después de costos. De
+  ahí salen comparar contra el efecto conocido más cercano y corregir por
+  muchas pruebas.
+- [goldmansachs/gs-quant](https://github.com/goldmansachs/gs-quant)
+  (Apache-2.0): la volatilidad realizada como medida. CALIOPE la mide por
+  vela, en vez de anualizarla con 252 días.
+- [microsoft/skill-recorder](https://github.com/microsoft/skill-recorder)
+  (MIT): evaluaciones fijas y deterministas de la parte con modelo
+  (`evals/predict/`).
+- [midudev/runonweb.ai](https://github.com/midudev/runonweb.ai) (MIT):
+  ajustes de Whisper en el navegador para el panel.
 - [google-research/harness2](https://github.com/google-research/harness2)
   (Apache-2.0): memoria persistente de lecciones respaldadas por evidencia
   que guía el trabajo futuro y se juzga a sí misma.

@@ -84,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--lookback-hours", type=float, default=24.0,
+                        help="also fetch this many hours before --start, for the volatility rival")
     args = parser.parse_args(argv)
     try:
         out = output_path(args.out)
@@ -95,14 +97,18 @@ def main(argv: list[str] | None = None) -> int:
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         if not start_ms < end_ms <= now_ms:
             raise ValueError("need --start < --end <= now: future candles cannot be observed")
+        if not 0 <= args.lookback_hours <= 168:
+            raise ValueError("--lookback-hours must be between 0 and 168")
+        fetch_from = start_ms - int(args.lookback_hours * 3_600_000)
         rows = []
-        for url in page_urls(symbol, args.interval, start_ms, end_ms):
+        for url in page_urls(symbol, args.interval, fetch_from, end_ms):
             rows.extend(download(url))
     except (ValueError, resolver.ResolutionError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 2
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = {"symbol": symbol, "interval": args.interval, "start": args.start, "end": args.end,
+               "lookback_hours": args.lookback_hours,
                "source": "api.binance.com/api/v3/klines",
                "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                "klines": rows}

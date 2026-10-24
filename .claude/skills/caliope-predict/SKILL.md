@@ -72,3 +72,11 @@ sellado de tiempo independiente (OpenTimestamps) se hace desde su PC.
 - Sellar sin confirmación, o sellar dos veces la misma idea con otro wording
   (el ledger lo rechaza por concepto).
 - Interpretar la predicción como orden de compra/venta.
+
+## Si cambia el modelo o estas instrucciones
+
+`evals/predict/cases.json` tiene mensajes fijos con su concepto correcto.
+Escribe tus respuestas como `{id: {"concept": {...}, "probability": p}}` en
+`state/answers.json` y califícalas con
+`python tools/eval_predict.py --answers state/answers.json`. Todo caso que
+falle es una forma en que interpretarías mal a la persona.

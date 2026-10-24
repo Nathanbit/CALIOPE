@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "now": "2026-10-23T09:00:00-05:00",
+  "timezone": "America/Guayaquil",
+  "note": "Viernes. Cada caso: mensaje de la persona, precio de referencia observado y lo que un intérprete correcto debe sacar. start no se califica: depende del momento exacto.",
+  "cases": [
+    {"id": "hoy-arriba", "message": "BTC toca 82.500 hoy, 60%", "reference_price": 81600,
+     "expected": {"asset": "BTCUSDT", "event": "touch", "level": 82500, "side": "at_or_above", "interval": "15m", "horizon_end": "2026-10-24T05:00:00Z", "probability": 0.6}},
+    {"id": "manana-abajo", "message": "bitcoin cae a 80 mil mañana, 35%", "reference_price": 81600,
+     "expected": {"asset": "BTCUSDT", "event": "touch", "level": 80000, "side": "at_or_below", "interval": "15m", "horizon_end": "2026-10-25T05:00:00Z", "probability": 0.35}},
+    {"id": "cierre-domingo", "message": "BTC cierra por debajo de 80.000 el domingo, 30 por ciento", "reference_price": 81600,
+     "expected": {"asset": "BTCUSDT", "event": "close_beyond", "level": 80000, "side": "below", "interval": "15m", "horizon_end": "2026-10-26T05:00:00Z", "probability": 0.3}},
+    {"id": "primero-abajo", "message": "btc toca 80k antes que 84k el lunes 40%", "reference_price": 81600,
+     "expected": {"asset": "BTCUSDT", "event": "touch_first", "lower": 80000, "upper": 84000, "true_if": "lower_first", "interval": "15m", "horizon_end": "2026-10-27T05:00:00Z", "probability": 0.4}},
+    {"id": "eth-horas", "message": "ETH sube a 4.000 en 4 horas, 55%", "reference_price": 3900,
+     "expected": {"asset": "ETHUSDT", "event": "touch", "level": 4000, "side": "at_or_above", "interval": "1m", "horizon_end": "2026-10-23T18:00:00Z", "probability": 0.55}},
+    {"id": "mil-quinientos-noche", "message": "btc 83 mil quinientos hoy a las 7 de la noche 25%", "reference_price": 81600,
+     "expected": {"asset": "BTCUSDT", "event": "touch", "level": 83500, "side": "at_or_above", "interval": "15m", "horizon_end": "2026-10-24T00:00:00Z", "probability": 0.25}},
+    {"id": "primero-arriba-viernes", "message": "btc toca 84000 antes que 80000 el viernes 45%", "reference_price": 81600,
+     "expected": {"asset": "BTCUSDT", "event": "touch_first", "lower": 80000, "upper": 84000, "true_if": "upper_first", "interval": "15m", "horizon_end": "2026-10-24T05:00:00Z", "probability": 0.45}},
+    {"id": "cierre-arriba-sabado", "message": "BTC cierra por encima de 82k el sábado, 50%", "reference_price": 81600,
+     "expected": {"asset": "BTCUSDT", "event": "close_beyond", "level": 82000, "side": "above", "interval": "15m", "horizon_end": "2026-10-25T05:00:00Z", "probability": 0.5}},
+    {"id": "sol-abajo", "message": "SOL toca 150 en 2 horas 20%", "reference_price": 160,
+     "expected": {"asset": "SOLUSDT", "event": "touch", "level": 150, "side": "at_or_below", "interval": "1m", "horizon_end": "2026-10-23T16:00:00Z", "probability": 0.2}},
+    {"id": "hora-exacta-decimal", "message": "btc cae hasta 81.000 a las 19:30, probabilidad de 0.7", "reference_price": 81600,
+     "expected": {"asset": "BTCUSDT", "event": "touch", "level": 81000, "side": "at_or_below", "interval": "15m", "horizon_end": "2026-10-24T00:30:00Z", "probability": 0.7}}
+  ]
+}

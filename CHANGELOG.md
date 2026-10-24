@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.0 — 2026-10-24
+
+Rivales más duros y evaluaciones fijas, tomando ideas de bhoult/correlation,
+gs-quant y microsoft/skill-recorder.
+
+- Rival de volatilidad: `fetch_klines.py` baja 24 h previas
+  (`--lookback-hours`); `resolve-auto` guarda en la resolución la
+  probabilidad que daba la volatilidad sola (principio de reflexión), solo
+  con velas cerradas antes de la ventana. Falla cerrado si faltan velas.
+- `rival` compara a cada autor con la historia y con la volatilidad, y
+  decide con un intervalo de familia `1 − 0,05/k` (Bonferroni por `k`
+  autores). `ci95` queda como referencia.
+- `evals/predict/cases.json` (10 casos) y `tools/eval_predict.py`: califican
+  sin LLM a cualquier intérprete de mensajes. `parse.js` pasa 10/10.
+- 9 tests nuevos.
+
 ## 0.19.0 — 2026-10-23
 
 Panel local para sellar al momento (`tools/panel/`).
