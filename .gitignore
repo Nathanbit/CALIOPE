@@ -33,3 +33,6 @@ service-account*.json
 
 # Bloqueo de escritura del ledger de predicciones
 *.jsonl.lock
+
+# Entornos aparte de los laboratorios (labs/), p. ej. .venv-causal
+.venv-*/
