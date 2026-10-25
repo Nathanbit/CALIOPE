@@ -175,7 +175,7 @@
 
 <script type="module">
 import { parseMessage, buildConcept, sealCommands, numbers, normalize } from './parse.js';
-import { parseLedger, indexLedger, scoredPairs, scoreboard, calibration, questionStatus, untilText, resolveCommands, SWARM } from './ledger.js';
+import { parseLedger, indexLedger, scoredPairs, scoreboard, calibration, questionStatus, untilText, resolveCommands, forecastLabel, SWARM } from './ledger.js';
 
 const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
 const $ = (id) => document.getElementById(id);
@@ -382,7 +382,7 @@ function renderQuestions() {
       : status === 'en curso' ? `cierra en ${untilText(q.horizon_end, now)}` : 'ya cerró: resuélvela';
     const seen = new Set();
     const pills = fs.filter((f) => !seen.has(f.author) && seen.add(f.author))
-      .map((f) => `<span class="pill">${esc(f.author)} <b>${f.status === 'ok' ? pct(f.probability) : 'fallo'}</b></span>`).join('');
+      .map((f) => `<span class="pill">${esc(f.author)} <b>${esc(forecastLabel(f))}</b></span>`).join('');
     const cmd = status === 'por resolver' ? resolveCommands(q, ledger) : null;
     return `<div class="card"><span class="tag ${status === 'en curso' ? 'live' : ''}">${esc(status)}</span>
       <h3 style="margin-top:6px">${esc(q.text)}</h3>
@@ -397,11 +397,11 @@ function renderQuestions() {
       const y = res.outcome === 'true' ? 1 : res.outcome === 'false' ? 0 : null;
       const seen = new Set();
       const pills = fs.filter((f) => !seen.has(f.author) && seen.add(f.author)).map((f) => {
-        const b = y === null || f.status !== 'ok' ? '' : ` · ${fx((f.probability - y) ** 2)}`;
-        return `<span class="pill">${esc(f.author)} ${f.status === 'ok' ? pct(f.probability) : 'fallo'}${b}</span>`;
+        const b = y === null || f.status !== 'ok' || f.quantiles ? '' : ` · ${fx((f.probability - y) ** 2)}`;
+        return `<span class="pill">${esc(f.author)} ${esc(forecastLabel(f))}${b}</span>`;
       }).join('');
       const vol = res.observed?.volatility_rival;
-      return `<tr><td>${esc(q.text)}</td><td><span class="tag done">${esc(res.outcome)}</span></td><td>${pills}</td>
+      return `<tr><td>${esc(q.text)}</td><td><span class="tag done">${esc(res.outcome === 'value' ? fmt(res.value) : res.outcome)}</span></td><td>${pills}</td>
         <td class="num">${vol?.available ? pct(vol.p) : '—'}</td>
         <td class="num">${res.observed?.bootstrap_rival?.available ? pct(res.observed.bootstrap_rival.p) : '—'}</td></tr>`;
     }).join('')}</tbody></table>` : '<span class="muted">Aún no hay preguntas resueltas.</span>';

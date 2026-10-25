@@ -35,6 +35,9 @@ def _pairs(questions: dict, forecasts: dict, resolutions: dict) -> tuple[list[di
         if resolution["outcome"] == "void":
             counts["void"] += 1
             continue
+        if resolution["outcome"] == "value":  # range questions: see range_score
+            counts["value"] = counts.get("value", 0) + 1
+            continue
         counts["resolved"] += 1
         y = 1.0 if resolution["outcome"] == "true" else 0.0
         seen: set[str] = set()
@@ -448,3 +451,62 @@ def rival(records: list[dict], resamples: int = 2000, seed: int = 0, min_n: int 
             "family_size": family, "family_level": round(1 - alpha, 6),
             "resamples": resamples, "seed": seed, "min_n": min_n, "authors": board,
             "evidence_type": "derivation"}
+
+
+def quantile_score(quantiles: dict, y: float) -> float:
+    """Mean over the given levels of twice the pinball loss, divided by the
+    observed value. With many levels it approaches the CRPS; dividing by the
+    price makes questions at different prices comparable. Lower is better,
+    and a narrow band that holds the outcome beats a wide one."""
+    total = 0.0
+    for level, q in quantiles.items():
+        tau = float(level)
+        total += 2 * ((tau - (1.0 if y < q else 0.0)) * (y - q))
+    return total / len(quantiles) / y
+
+
+def range_score(records: list[dict], min_n: int = 30) -> dict:
+    """Range (close_value) forecasts: per author, the relative quantile score
+    (CRPS approximation), the coverage of the 10-90% band (it should be about
+    80%), and the same score for the volatility and bootstrap rivals on the
+    same questions and the same levels. First forecast per author counts."""
+    questions, forecasts, resolutions = pl.index(records)
+    rows: dict[str, list[dict]] = {}
+    for qid, resolution in resolutions.items():
+        if resolution.get("outcome") != "value":
+            continue
+        y = float(resolution["value"])
+        observed = resolution.get("observed") or {}
+        seen: set[str] = set()
+        for f in sorted(forecasts.get(qid, []), key=lambda r: r["seq"]):
+            if f["author"] in seen:
+                continue
+            seen.add(f["author"])
+            if f.get("status") != "ok" or not f.get("quantiles"):
+                continue
+            levels = f["quantiles"]
+            row = {"question_id": qid, "y": y, "score": quantile_score(levels, y),
+                   "inside": levels["0.1"] <= y <= levels["0.9"]}
+            for name in ("volatility_rival", "bootstrap_rival"):
+                rival = observed.get(name) or {}
+                if rival.get("available") and set(levels) <= set(rival.get("quantiles", {})):
+                    row[name] = quantile_score({q: rival["quantiles"][q] for q in levels}, y)
+            rows.setdefault(f["author"], []).append(row)
+    board = []
+    for author, own in sorted(rows.items()):
+        entry = {"author": author, "n": len(own),
+                 "crps_rel": round(sum(r["score"] for r in own) / len(own), 6),
+                 "coverage_80": round(sum(r["inside"] for r in own) / len(own), 4)}
+        for name in ("volatility_rival", "bootstrap_rival"):
+            both = [r for r in own if name in r]
+            entry[name] = None if not both else {
+                "n": len(both), "rival_crps_rel": round(sum(r[name] for r in both) / len(both), 6),
+                "own_crps_rel": round(sum(r["score"] for r in both) / len(both), 6)}
+        board.append(entry)
+    report = {"authors": board, "evidence_type": "derivation",
+              "note": "crps_rel: puntuación de cuantiles relativa al precio (menor es mejor); "
+                      "coverage_80: fracción dentro de la banda 10-90 (lo ideal es ~0,8)"}
+    total = sum(r["n"] for r in board)
+    if total < min_n:
+        report["warning"] = f"only {total} scored range forecasts: not meaningful yet"
+    return report

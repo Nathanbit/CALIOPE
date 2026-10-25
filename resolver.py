@@ -29,6 +29,7 @@ import json
 import math
 import random
 import re
+from statistics import NormalDist
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,7 +46,11 @@ RULE_KEYS = {
     "touch_first": {"kind", "symbol", "interval", "start", "lower", "upper", "true_if"},
     "touch": {"kind", "symbol", "interval", "start", "level", "side"},
     "close_beyond": {"kind", "symbol", "interval", "start", "level", "side"},
+    # A numeric question: the close of the last candle of the window.
+    "close_value": {"kind", "symbol", "interval", "start"},
 }
+QUANTILE_LEVELS = ("0.05", "0.1", "0.25", "0.5", "0.75", "0.9", "0.95")
+REQUIRED_QUANTILES = ("0.1", "0.5", "0.9")
 SIDES = {"touch": ("at_or_below", "at_or_above"), "close_beyond": ("below", "above")}
 
 
@@ -101,7 +106,7 @@ def validate_rule(rule: dict, horizon_end: str) -> dict:
         if rule["true_if"] not in ("lower_first", "upper_first"):
             raise ResolutionError("rule.true_if must be lower_first or upper_first")
         out.update(lower=lower, upper=upper)
-    else:
+    elif kind != "close_value":
         out["level"] = _price(rule["level"], "rule.level")
         if rule["side"] not in SIDES[kind]:
             raise ResolutionError(f"rule.side must be one of {SIDES[kind]}")
@@ -275,6 +280,14 @@ def volatility_rival(rule: dict, horizon_end: str, data: dict,
         return dict(base, reason="zero volatility before the window")
     spot, n = closes[-1], (end - start) // step
     scale = sigma * math.sqrt(n)
+    if rule["kind"] == "close_value":
+        normal = NormalDist()
+        return {"available": True, "version": VOLATILITY_VERSION,
+                "quantiles": {q: round(spot * math.exp(normal.inv_cdf(float(q)) * scale), 2)
+                              for q in QUANTILE_LEVELS},
+                "sigma_per_candle": round(sigma, 8), "lookback_candles": len(closes),
+                "window_candles": n, "reference_close": spot,
+                "model": "driftless log random walk, lognormal quantiles"}
     if rule["kind"] == "touch_first":
         lower, upper = rule["lower"], rule["upper"]
         if not lower < spot < upper:
@@ -309,13 +322,16 @@ def step_outcome(rule: dict, high: float, low: float, close: float) -> str | Non
     if kind == "touch":
         hit = low <= rule["level"] if rule["side"] == "at_or_below" else high >= rule["level"]
         return "true" if hit else None
+    if kind == "close_value":
+        return None  # a value question is decided by the last close, not by one candle
     beyond = close < rule["level"] if rule["side"] == "below" else close > rule["level"]
     return "true" if beyond else None
 
 
 def undecided_outcome(rule: dict) -> str:
-    """The outcome when no candle decided: touch_first touches neither level."""
-    return "void" if rule["kind"] == "touch_first" else "false"
+    """The outcome when no candle decided: touch_first touches neither level;
+    a value question always ends here, with the last close."""
+    return {"touch_first": "void", "close_value": "value"}.get(rule["kind"], "false")
 
 
 def evaluate(rule: dict, horizon_end: str, data: dict) -> tuple[str, dict]:
@@ -325,6 +341,9 @@ def evaluate(rule: dict, horizon_end: str, data: dict) -> tuple[str, dict]:
     kind = rule["kind"]
     evidence = {"candles": len(candles), "window_start": rule["start"], "window_end": horizon_end,
                 "high": max(c["high"] for c in candles), "low": min(c["low"] for c in candles)}
+    if kind == "close_value":
+        last = candles[-1]
+        return "value", dict(evidence, value=last["close"], decisive_candle=iso_ms(last["open_ms"]))
     for c in candles:
         outcome = step_outcome(rule, c["high"], c["low"], c["close"])
         if outcome is None:
@@ -407,7 +426,8 @@ def bootstrap_rival(rule: dict, horizon_end: str, data: dict,
     seed_text = json.dumps([rule, horizon_end], sort_keys=True)
     rng_seed = int(hashlib.sha256(seed_text.encode("utf-8")).hexdigest()[:16], 16)
     rng = random.Random(rng_seed)
-    counts = {"true": 0, "false": 0, "void": 0}
+    counts = {"true": 0, "false": 0, "void": 0, "value": 0}
+    finals = []
     spot = closes[start - step]
     for _ in range(replays):
         price, outcome = spot, None
@@ -418,6 +438,17 @@ def bootstrap_rival(rule: dict, horizon_end: str, data: dict,
                 break
             price *= c
         counts[outcome or undecided_outcome(rule)] += 1
+        finals.append(price)
+    if rule["kind"] == "close_value":
+        finals.sort()
+        pick = lambda q: finals[min(len(finals) - 1, int(float(q) * len(finals)))]  # noqa: E731
+        return {"available": True, "version": BOOTSTRAP_VERSION,
+                "quantiles": {q: round(pick(q), 2) for q in QUANTILE_LEVELS},
+                "replays": replays, "pool_candles": len(bars),
+                "pool_days": round(len(bars) * step / DAY_MS, 2), "neighbor_slots": width,
+                "reference_close": spot, "seed": rng_seed,
+                "model": "time-of-day bootstrap of past candles (idea: trader-timemachine)"}
+    counts.pop("value")
     decided = counts["true"] + counts["false"]
     if not decided:
         return dict(base, reason="every replay was void", replays=replays)

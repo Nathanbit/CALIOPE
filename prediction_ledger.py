@@ -46,6 +46,7 @@ import resolver
 ROOT = Path(__file__).resolve().parent
 GENESIS = "0" * 64
 OUTCOMES = ("true", "false", "void")
+VALUE = "value"  # outcome of a close_value question; the number is in "value"
 FAILURE = "failure"
 LESSON_DECISIONS = ("adopt", "reject", "retire")
 RECORD_TYPES = ("question", "forecast", "resolution", "lesson", "lesson_decision")
@@ -238,6 +239,32 @@ def _check_question(state: State, record: dict) -> None:
         raise GateError(f"{qid} already exists")
 
 
+def _is_value_question(question: dict) -> bool:
+    return (question.get("rule") or {}).get("kind") == "close_value"
+
+
+def _check_quantiles(quantiles: object) -> None:
+    """Levels from QUANTILE_LEVELS, at least 10/50/90%, positive finite
+    prices that never decrease as the level rises."""
+    if not isinstance(quantiles, dict) or not quantiles:
+        raise GateError("an ok value forecast needs quantiles")
+    unknown = set(quantiles) - set(resolver.QUANTILE_LEVELS)
+    if unknown:
+        raise GateError(f"unknown quantile levels {sorted(unknown)}; use {resolver.QUANTILE_LEVELS}")
+    missing = set(resolver.REQUIRED_QUANTILES) - set(quantiles)
+    if missing:
+        raise GateError(f"quantiles must include {resolver.REQUIRED_QUANTILES}")
+    previous = 0.0
+    for level in sorted(quantiles, key=float):
+        value = quantiles[level]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or value <= 0:
+            raise GateError(f"quantile {level} must be a positive finite price")
+        if value < previous:
+            raise GateError("quantiles must not decrease as the level rises")
+        previous = value
+
+
 def _check_forecast(state: State, record: dict, recorded: datetime) -> None:
     qid = record.get("question_id")
     if qid not in state.questions:
@@ -260,7 +287,17 @@ def _check_forecast(state: State, record: dict, recorded: datetime) -> None:
         raise GateError("a forecast sealed now must carry its thought_state "
                         "(only backdated forecasts with sealed evidence go without)")
     status, probability = record.get("status"), record.get("probability")
-    if status == "ok":
+    quantiles = record.get("quantiles")
+    if _is_value_question(question):
+        if probability is not None:
+            raise GateError("a value question is forecast with quantiles, not a probability")
+        if status == "ok":
+            _check_quantiles(quantiles)
+        elif status != FAILURE or quantiles is not None:
+            raise GateError("status must be ok, or failure with no quantiles")
+    elif quantiles is not None:
+        raise GateError("quantiles only belong to value (close_value) questions")
+    elif status == "ok":
         if isinstance(probability, bool) or not isinstance(probability, (int, float)) \
                 or not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
             raise GateError("an ok forecast needs a probability between 0 and 1")
@@ -302,7 +339,14 @@ def _check_resolution(state: State, record: dict, recorded: datetime) -> None:
     if not state.forecasts.get(qid):
         raise GateError("refusing to resolve a question without forecasts")
     outcome = record.get("outcome")
-    if outcome not in OUTCOMES:
+    if _is_value_question(state.questions[qid]):
+        if outcome not in (VALUE, "void"):
+            raise GateError("a value question resolves to 'value' (or 'void')")
+        value = record.get("value")
+        if outcome == VALUE and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                 or not math.isfinite(value) or value <= 0):
+            raise GateError("a value outcome needs the observed positive value")
+    elif outcome not in OUTCOMES:
         raise GateError(f"outcome must be one of {OUTCOMES}")
     if outcome == "void" and not (isinstance(record.get("void_reason"), str)
                                   and record["void_reason"].strip()):
@@ -488,7 +532,7 @@ def _concept_question(concept: dict, project: str | None) -> Callable[[State], d
 
 def seal(path: Path, concept: dict, author: str, probability: float | None, rationale: str,
          project: str | None = None, lessons_applied: list[str] | None = None,
-         dry_run: bool = False) -> dict:
+         dry_run: bool = False, quantiles: dict | None = None) -> dict:
     """Step 2 shortcut: one concept becomes a question plus the author's
     forecast, appended together or not at all."""
     question = _concept_question(concept, project)
@@ -500,7 +544,7 @@ def seal(path: Path, concept: dict, author: str, probability: float | None, rati
 
     def forecast_build(state: State) -> dict:
         return _forecast_body(holder["question_id"], author, probability, rationale, None, None,
-                              lessons_applied, state)
+                              lessons_applied, state, quantiles)
     q_record, f_record = commit_many(path, [ask_build, forecast_build], dry_run=dry_run)
     return {"dry_run": dry_run, "question": q_record, "forecast": f_record}
 
@@ -517,7 +561,11 @@ def _thought(state: State, qid: str, author: str, version: str | None = None) ->
 
 def _forecast_body(qid: str, author: str, probability: float | None, rationale: str,
                    made_at: str | None, sealed_evidence: dict | None,
-                   lessons_applied: list[str] | None, state: State | None = None) -> dict:
+                   lessons_applied: list[str] | None, state: State | None = None,
+                   quantiles: dict | None = None) -> dict:
+    if quantiles is not None:
+        return _value_forecast_body(qid, author, quantiles, rationale, made_at, sealed_evidence,
+                                    lessons_applied, state)
     status = "ok"
     if probability is None or isinstance(probability, bool) \
             or not isinstance(probability, (int, float)) or not math.isfinite(probability) \
@@ -538,24 +586,45 @@ def _forecast_body(qid: str, author: str, probability: float | None, rationale: 
     return body
 
 
+def _value_forecast_body(qid: str, author: str, quantiles: dict, rationale: str,
+                         made_at: str | None, sealed_evidence: dict | None,
+                         lessons_applied: list[str] | None, state: State | None) -> dict:
+    """A range forecast. Levels are normalized to their canonical spelling
+    ("0.1", not "0.10") and prices to floats; the gates do the rest."""
+    canonical_level = {float(q): q for q in resolver.QUANTILE_LEVELS}
+    try:
+        clean = {canonical_level[float(k)]: float(v) for k, v in quantiles.items()}
+    except (TypeError, ValueError, KeyError):
+        raise GateError(f"quantile levels must be among {resolver.QUANTILE_LEVELS}") from None
+    body = _forecast_body(qid, author, None, rationale, made_at, sealed_evidence,
+                          lessons_applied, state)
+    body.update(status="ok", quantiles=clean)
+    return body
+
+
 def forecast(path: Path, qid: str, author: str, probability: float | None, rationale: str,
              made_at: str | None = None, sealed_evidence: dict | None = None,
-             lessons_applied: list[str] | None = None) -> dict:
+             lessons_applied: list[str] | None = None, quantiles: dict | None = None) -> dict:
     """Seal a forecast. A ``made_at`` in the past needs ``sealed_evidence``
     (64-hex sha256 of an earlier sealed file and the commit that published it)."""
     if made_at is not None:
         parse_time(made_at, "made_at")
     return commit(path, lambda state: _forecast_body(qid, author, probability, rationale, made_at,
-                                                     sealed_evidence, lessons_applied, state))
+                                                     sealed_evidence, lessons_applied, state,
+                                                     quantiles))
 
 
 def resolve(path: Path, qid: str, outcome: str, observed: dict, resolved_at: str | None = None,
-            void_reason: str | None = None, method: str = "manual") -> dict:
+            void_reason: str | None = None, method: str = "manual",
+            value: float | None = None) -> dict:
     def build(_: State) -> dict:
         now = utc_now_iso()
-        return {"type": "resolution", "question_id": qid, "outcome": outcome,
+        body = {"type": "resolution", "question_id": qid, "outcome": outcome,
                 "void_reason": void_reason, "observed": observed, "method": method,
                 "resolved_at": resolved_at or now, "recorded_at": now}
+        if outcome == VALUE:
+            body["value"] = value
+        return body
     return commit(path, build)
 
 
@@ -599,7 +668,7 @@ def resolve_auto(path: Path, qid: str, klines_path: Path, fine_path: Path | None
                     resolver="resolver.py", resolver_version=resolver.RESOLVER_VERSION,
                     **rivals)
     return resolve(path, qid, outcome, observed, void_reason=evidence.get("void_reason"),
-                   method="auto")
+                   method="auto", value=evidence.get("value"))
 
 
 def propose_lesson(path: Path, text: str, scope: str, evidence_questions: list[str],
@@ -700,20 +769,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--made-at")
     p.add_argument("--sealed-evidence", help="inline JSON or @path")
     p.add_argument("--lessons", default="", help="comma-separated adopted lesson ids")
+    p.add_argument("--quantiles", help='value questions: inline JSON or @path, e.g. '
+                                       '{"0.1": 78000, "0.5": 80500, "0.9": 83000}')
     p.set_defaults(run=lambda a: forecast(a.ledger, a.question, a.author, a.probability,
                                           a.rationale, a.made_at, json_arg(a.sealed_evidence),
-                                          _ids(a.lessons)))
+                                          _ids(a.lessons), json_arg(a.quantiles)))
     p = sub.add_parser("seal", help="concept -> question + forecast in one step")
     p.add_argument("--concept", required=True, help="inline JSON or @path (see concepts.py)")
     p.add_argument("--author", required=True)
-    p.add_argument("--probability", type=float, required=True)
+    p.add_argument("--probability", type=float,
+                   help="yes/no questions; value questions use --quantiles")
+    p.add_argument("--quantiles", help="close_value concepts: inline JSON or @path")
     p.add_argument("--rationale", default="")
     p.add_argument("--project")
     p.add_argument("--lessons", default="", help="comma-separated adopted lesson ids")
     p.add_argument("--dry-run", action="store_true",
                    help="run every gate and print the records without writing them")
     p.set_defaults(run=lambda a: seal(a.ledger, json_arg(a.concept), a.author, a.probability,
-                                      a.rationale, a.project, _ids(a.lessons), a.dry_run))
+                                      a.rationale, a.project, _ids(a.lessons), a.dry_run,
+                                      json_arg(a.quantiles)))
     p = sub.add_parser("resolve")
     p.add_argument("--question", required=True)
     p.add_argument("--outcome", required=True, choices=OUTCOMES)
@@ -729,6 +803,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="finer candles (e.g. 1s) to break a touch_first tie inside one candle")
     p.set_defaults(run=lambda a: resolve_auto(a.ledger, a.question, a.klines, a.fine_klines))
     sub.add_parser("score").set_defaults(run=_read_only(fs.score))
+    sub.add_parser("ranges", help="range (close_value) forecasts: quantile score and coverage") \
+        .set_defaults(run=_read_only(fs.range_score))
     p = sub.add_parser("rival", help="each author against a rival that only knows the past")
     p.add_argument("--resamples", type=int, default=2000)
     p.add_argument("--seed", type=int, default=0)

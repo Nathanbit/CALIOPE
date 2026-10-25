@@ -28,7 +28,7 @@ import evidence_io as eio
 import resolver
 
 CONCEPT_VERSION = "1.0"
-EVENTS = ("touch_first", "touch", "close_beyond")
+EVENTS = ("touch_first", "touch", "close_beyond", "close_value")
 KEYS = {
     "touch_first": {"asset", "event", "interval", "start", "horizon_end", "reference_price",
                     "reference_source", "lower", "upper", "true_if"},
@@ -36,6 +36,9 @@ KEYS = {
               "reference_source", "level", "side"},
     "close_beyond": {"asset", "event", "interval", "start", "horizon_end", "reference_price",
                      "reference_source", "level", "side"},
+    # A range forecast: where the price closes, given as quantiles.
+    "close_value": {"asset", "event", "interval", "start", "horizon_end", "reference_price",
+                    "reference_source"},
 }
 DISTANCE_BUCKETS = ((0.5, "d<0.5%"), (1.0, "d0.5-1%"), (2.0, "d1-2%"), (5.0, "d2-5%"),
                     (math.inf, "d>5%"))
@@ -79,7 +82,7 @@ def validate_concept(concept: dict) -> dict:
             "start": concept["start"]}
     if event == "touch_first":
         rule.update(lower=concept["lower"], upper=concept["upper"], true_if=concept["true_if"])
-    else:
+    elif event != "close_value":
         rule.update(level=concept["level"], side=concept["side"])
     try:
         rule = resolver.validate_rule(rule, horizon)
@@ -94,7 +97,7 @@ def validate_concept(concept: dict) -> dict:
         if not out["lower"] < out["reference_price"] < out["upper"]:
             raise ConceptError("the reference price must lie between lower and upper, or the "
                                "question is already decided")
-    else:
+    elif event != "close_value":
         out.update(level=rule["level"], side=rule["side"])
         already = {"at_or_below": out["reference_price"] <= out["level"],
                    "at_or_above": out["reference_price"] >= out["level"]}.get(out["side"])
@@ -108,7 +111,7 @@ def rule_of(concept: dict) -> dict:
             "start": concept["start"]}
     if concept["event"] == "touch_first":
         rule.update(lower=concept["lower"], upper=concept["upper"], true_if=concept["true_if"])
-    else:
+    elif concept["event"] != "close_value":
         rule.update(level=concept["level"], side=concept["side"])
     return resolver.validate_rule(rule, concept["horizon_end"])
 
@@ -126,6 +129,12 @@ def question_fields(concept: dict) -> dict:
         criteria = (f"Primer nivel tocado por mínimos/máximos de velas de {interval} en la ventana: "
                     f"{_fmt(concept[first])} primero = true, {_fmt(concept[other])} primero = false; "
                     "ninguno o ambos en la misma vela = void")
+    elif concept["event"] == "close_value":
+        text = (f"Precio de cierre de {asset} en la vela de {interval} que cierra a las "
+                f"{concept['horizon_end']} (pronósticos antes de {concept['start']})")
+        criteria = (f"El valor es el cierre de la última vela de {interval} antes de "
+                    f"{concept['horizon_end']}. Se pronostica con cuantiles (10%, 50% y 90% como "
+                    "mínimo) y se puntúa con la puntuación de cuantiles y la cobertura")
     elif concept["event"] == "touch":
         text = (f"{asset} cotiza {SIDE_WORDS[concept['side']]} {_fmt(concept['level'])} "
                 f"{window} (velas de {interval})")
@@ -148,6 +157,12 @@ def _bucket(value: float, buckets: tuple) -> str:
 
 def concept_class(concept: dict) -> str:
     """What kind of prediction this is, without the exact numbers."""
+    if concept["event"] == "close_value":
+        start = eio.parse_aware_time(concept["start"], "start", ConceptError)
+        end = eio.parse_aware_time(concept["horizon_end"], "horizon_end", ConceptError)
+        hours = (end - start).total_seconds() / 3600
+        return "|".join((concept["asset"], "close_value", "value", "d-",
+                         _bucket(hours, HORIZON_BUCKETS)))
     if concept["event"] == "touch_first":
         target = concept["lower"] if concept["true_if"] == "lower_first" else concept["upper"]
         direction = concept["true_if"]

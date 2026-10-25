@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseLedger, indexLedger, scoredPairs, scoreboard, calibration, questionStatus, untilText, resolveCommands, SWARM } from './ledger.js';
+import { parseLedger, indexLedger, scoredPairs, scoreboard, calibration, questionStatus, untilText, resolveCommands, forecastLabel, SWARM } from './ledger.js';
 
 const q = (id, extra = {}) => ({ type: 'question', question_id: id, text: id, horizon_end: '2026-10-25T05:00:00Z',
   rule: { kind: 'touch', symbol: 'BTCUSDT', interval: '15m', start: '2026-10-24T14:45:00Z', level: 79600, side: 'at_or_below' }, ...extra });
@@ -69,4 +69,13 @@ test('lee el ledger real del repositorio', () => {
   const idx = indexLedger(records);
   assert.ok(idx.questions.size >= 3);
   assert.ok(idx.forecasts.get('q-acbe0f5bc6ad9833').some((x) => x.author === 'nathan'));
+});
+
+test('las preguntas de rango no se puntúan como sí o no y se muestran como banda', () => {
+  const recs = [q('q-v'), { type: 'forecast', question_id: 'q-v', author: 'nathan', probability: null, status: 'ok', seq: 2,
+    quantiles: { '0.1': 78000, '0.5': 80500, '0.9': 83000 } }, { type: 'resolution', question_id: 'q-v', outcome: 'value', value: 81000, observed: {} }];
+  assert.deepEqual(scoredPairs(indexLedger(recs)), []);
+  assert.equal(forecastLabel(recs[1]), '78.0k–83.0k');
+  assert.equal(forecastLabel({ status: 'ok', probability: 0.65 }), '65%');
+  assert.equal(forecastLabel({ status: 'failure' }), 'fallo');
 });
