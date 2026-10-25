@@ -37,7 +37,8 @@ export function scoredPairs(index, minAuthors = 2) {
   const swarm = [];
   for (const [qid, q] of index.questions) {
     const res = index.resolutions.get(qid);
-    if (!res || res.outcome === 'void') continue;
+    // Only yes/no questions score here; 'value' (range) questions have their own score.
+    if (!res || (res.outcome !== 'true' && res.outcome !== 'false')) continue;
     const y = res.outcome === 'true' ? 1 : 0;
     const seen = new Set();
     const group = [];
@@ -120,4 +121,14 @@ export function resolveCommands(q, ledger) {
   const out = `${dir}/${r.symbol}_${r.interval}_${stamp}_${q.question_id.slice(2, 10)}.json`;
   return `python tools/fetch_klines.py --symbol ${r.symbol} --interval ${r.interval} --start ${r.start} --end ${q.horizon_end} --out ${out}\n`
     + `python prediction_ledger.py --ledger '${ledger}' resolve-auto --question ${q.question_id} --klines ${out}`;
+}
+
+// Cómo se muestra un pronóstico: probabilidad, o banda 10–90 si es de rango.
+export function forecastLabel(f) {
+  if (f.status !== 'ok') return 'fallo';
+  if (f.quantiles) {
+    const k = (v) => `${(v / 1000).toFixed(1)}k`;
+    return `${k(f.quantiles['0.1'])}–${k(f.quantiles['0.9'])}`;
+  }
+  return `${Math.round(f.probability * 100)}%`;
 }

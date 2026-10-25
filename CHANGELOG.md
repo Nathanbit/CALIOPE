@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.29.0 — 2026-10-24
+
+Pronósticos de rango con cuantiles, puntuación tipo CRPS y cobertura.
+
+- Pregunta `close_value` (regla y concepto): el cierre de la última vela de
+  la ventana. Los pronósticos llevan `quantiles` (obligatorios 10/50/90%) en
+  vez de probabilidad, y las compuertas exigen niveles válidos, precios
+  positivos y orden creciente. `seal` y `forecast` aceptan `--quantiles`.
+- La resolución guarda `outcome: "value"` y `value`. Los rivales de
+  volatilidad (lognormal) y bootstrap (cuantiles de las repeticiones) guardan
+  sus bandas.
+- `ranges` y `forecast_scoring.range_score`: puntuación de cuantiles
+  relativa al precio (aproxima el CRPS), cobertura de la banda 10–90 y
+  comparación con las bandas de los rivales.
+- Las preguntas de rango quedan fuera del Brier y de `rival` (antes un
+  `value` habría contado como `false`). El panel las muestra como banda.
+- Los registros de sí o no no cambian: el ledger real verifica igual.
+- 6 tests nuevos y 1 de panel.
+
 ## 0.28.0 — 2026-10-24
 
 Polymarket como rival de mercado (`labs/polymarket/`).

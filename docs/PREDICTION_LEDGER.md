@@ -62,6 +62,39 @@ la skill `caliope-predict` convierte un mensaje como "sella: BTC toca 80.000
 antes del viernes, 30%" en el concepto, enseña el dry run y sella solo con tu
 confirmación.
 
+## Pronósticos de rango (cuantiles)
+
+No todo es sí o no. "¿Dónde cierra BTC el domingo a las 12:00?" se responde
+con una banda: "entre 78.000 y 83.000 con un 80% de confianza, lo más
+probable 80.500". Eso es una pregunta `close_value`:
+
+```powershell
+# concepto: asset, event = close_value, interval, start (cierre de pronósticos),
+# horizon_end (la vela cuyo cierre se mide), reference_price, reference_source
+python prediction_ledger.py --ledger $L seal --concept "@state/rango.json" --author nathan `
+  --quantiles '{"0.1": 78000, "0.5": 80500, "0.9": 83000}' --dry-run
+python prediction_ledger.py --ledger $L forecast --question q-... --author claude `
+  --quantiles '{"0.1": 79000, "0.5": 80800, "0.9": 82500}'
+python prediction_ledger.py --ledger $L ranges
+```
+
+- **Cuantiles**: obligatorios 10%, 50% y 90%; opcionales 5%, 25%, 75% y 95%.
+  Precios positivos que no bajan al subir el nivel. Una pregunta de rango no
+  acepta probabilidad, y una de sí o no no acepta cuantiles.
+- **Resolución**: `resolve-auto` guarda `outcome: "value"` y el cierre de la
+  última vela de la ventana en `value`. Los rivales guardan sus propias
+  bandas: la de volatilidad (lognormal) y la del bootstrap (cuantiles de los
+  precios finales de las repeticiones).
+- **Puntuación** (`ranges`): la puntuación de cuantiles, el doble de la
+  pérdida pinball promediada en los niveles. Con muchos niveles se aproxima
+  al CRPS. Se divide por el precio para comparar preguntas. Menor es mejor:
+  una banda estrecha que acierta le gana a una ancha, y una banda que no
+  contiene el resultado paga mucho. **Cobertura**: la fracción de veces que el
+  resultado cae dentro de 10–90; si dices 80%, debería rondar el 80%. Cada
+  autor se compara con las bandas de los rivales en las mismas preguntas.
+- Las preguntas de rango no entran en el Brier ni en `rival`, que son de sí o
+  no; `score` las cuenta aparte (`counts.value`).
+
 ## Estado continuo entre pronósticos (idea Coconut)
 
 Inspirado en *Chain of Continuous Thought* de Meta FAIR
