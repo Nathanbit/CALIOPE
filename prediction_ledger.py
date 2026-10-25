@@ -61,7 +61,7 @@ COMMIT = re.compile(r"[0-9a-fA-F]{7,40}")
 # From the merge of the continuous-state feature (PR #21) every live forecast
 # must carry its thought_state; older records stay valid as they are.
 THOUGHT_REQUIRED_FROM = datetime(2026, 10, 23, 12, 18, 32, tzinfo=timezone.utc)
-AUTHOR_KINDS = ("ia", "indicador", "sim", "experto")
+AUTHOR_KINDS = ("ia", "indicador", "sim", "experto", "mercado")
 AUTHOR = re.compile(r"[a-z0-9][a-z0-9_.-]{0,39}(?::[a-z0-9][a-z0-9_.-]{0,39})?")
 
 

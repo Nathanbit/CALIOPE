@@ -19,6 +19,7 @@
 | `evals/predict/`, `tools/eval_predict.py` | Casos fijos mensaje → concepto y su calificación determinista |
 | `labs/causal_btc/` | Experimento aparte: causal-ts busca qué anticipa a BTC; hipótesis congeladas y validadas en holdout. No lo importa el núcleo |
 | `labs/kronos_author/` | Kronos (modelo base de velas) como autor `ia:kronos`: caminos muestreados uno a uno y juzgados con el resolutor; propone, no sella |
+| `labs/polymarket/` | Espejo exacto de los mercados "Bitcoin above X on <fecha>" como preguntas `close_beyond` 1m, autor `mercado:polymarket` |
 | `tools/panel/` | Panel local: dictar o escribir una predicción → concepto → comandos de `seal`; vista del ledger. No escribe en el ledger |
 | `projects/macroflow/` | Primer caso de uso: Pine y evidencia congelados en `MANIFEST.sha256`, predicciones en `predictions/` |
 | `archive/` | Piezas retiradas (themis, réplica Python, disciplina); sin mantenimiento, ver `archive/README.md` |
