@@ -1,0 +1,7 @@
+# Solo para labs/kronos_author/propose.py. El núcleo de CALIOPE no las usa.
+# Además: git clone https://github.com/shiyu-coder/Kronos (MIT) junto a la carpeta CALIOPE.
+torch>=2.0
+pandas
+einops==0.8.1
+huggingface_hub==0.33.1
+safetensors==0.6.2
