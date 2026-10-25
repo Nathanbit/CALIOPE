@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.28.0 — 2026-10-24
+
+Polymarket como rival de mercado (`labs/polymarket/`).
+
+- `mirror.py` convierte un mercado "Bitcoin above X on <fecha>" en su
+  pregunta espejo exacta: `close_beyond` `above` X, velas de 1m, ventana de
+  una vela a las 12:00 de Nueva York (con la regla de horario de verano de
+  EE. UU., sin tzdata). La probabilidad del "Sí" (punto medio entre compra y
+  venta, o precio listado) entra como autor `mercado:polymarket`. Imprime
+  los comandos; no escribe en el ledger.
+- Nuevo tipo de autor `mercado:`.
+- 5 tests, incluido sellar, pronosticar y resolver la pregunta espejo
+  (cierre estrictamente mayor).
+
 ## 0.27.0 — 2026-10-24
 
 Kronos como autor (`labs/kronos_author/`).

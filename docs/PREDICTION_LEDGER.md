@@ -259,6 +259,7 @@ y su puntuación son propios:
 | Modelo de IA | `ia:gemini`, `ia:chatgpt`, `ia:claude` |
 | Indicador | `indicador:macroflow` |
 | Simulación multiagente | `sim:mirofish` |
+| Mercado con dinero real | `mercado:polymarket` ([labs/polymarket](../labs/polymarket/README.md)) |
 | Experto externo | `experto:fulano` |
 
 `" IA:Gemini "` se guarda como `ia:gemini`; un tipo desconocido o un nombre
