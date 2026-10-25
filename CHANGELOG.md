@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.27.0 — 2026-10-24
+
+Kronos como autor (`labs/kronos_author/`).
+
+- `propose.py` genera N caminos de velas con Kronos (shiyu-coder/Kronos, MIT)
+  antes de que abra la ventana. Los pide uno por uno, porque `predict` los
+  promedia y un camino promedio casi nunca toca un nivel. Juzga cada camino
+  con `resolver.step_outcome` y propone el comando `forecast --author
+  ia:kronos`. No escribe en el ledger.
+- `kronos_core.py` (biblioteca estándar): historia hasta ahora, velas a
+  predecir, juicio de caminos solo dentro de la ventana y conteo sin void.
+- 6 tests con modelo falso. El adaptador se probó con el código real de
+  Kronos y un modelo diminuto de pesos aleatorios.
+
 ## 0.26.0 — 2026-10-24
 
 Tercer rival: bootstrap de velas pasadas por hora del día (idea de la Time
