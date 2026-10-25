@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.26.0 — 2026-10-24
+
+Tercer rival: bootstrap de velas pasadas por hora del día (idea de la Time
+Machine de day-trader-skill, MIT, reimplementada).
+
+- `resolver.step_outcome`: una sola definición de qué decide una vela. La
+  usan el resolutor, el bootstrap y los autores modelo.
+- `resolver.bootstrap_rival`: entre 200 y 2.000 repeticiones de la ventana
+  con velas de los 30 días previos, de la misma hora (±30 min) y escaladas
+  al precio. Semilla derivada de la regla; los empates de `touch_first` se
+  anulan y no cuentan. `resolve-auto` lo guarda como `bootstrap_rival`.
+- `rival` juzga también contra el bootstrap; la familia cuenta los tres
+  rivales. El panel lo muestra en Marcador y en Resueltas.
+- `fetch_klines.py` baja 30 días previos por defecto (24 h en velas de
+  segundos).
+- 6 tests nuevos y 1 de panel.
+
 ## 0.25.0 — 2026-10-24
 
 Auditoría de los PRs #19 a #33. Cuatro hallazgos confirmados al ejecutarlos y

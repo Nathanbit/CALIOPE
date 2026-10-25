@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import random
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -292,6 +293,31 @@ def volatility_rival(rule: dict, horizon_end: str, data: dict,
             "model": "driftless log random walk, reflection principle"}
 
 
+def step_outcome(rule: dict, high: float, low: float, close: float) -> str | None:
+    """What one candle decides for a validated rule: "true", "false", "void"
+    (both touch_first levels inside it) or None (not decided yet). The single
+    definition used by the resolver, the bootstrap rival and model authors."""
+    kind = rule["kind"]
+    if kind == "touch_first":
+        low_hit, high_hit = low <= rule["lower"], high >= rule["upper"]
+        if low_hit and high_hit:
+            return "void"
+        if low_hit or high_hit:
+            first = "lower_first" if low_hit else "upper_first"
+            return "true" if first == rule["true_if"] else "false"
+        return None
+    if kind == "touch":
+        hit = low <= rule["level"] if rule["side"] == "at_or_below" else high >= rule["level"]
+        return "true" if hit else None
+    beyond = close < rule["level"] if rule["side"] == "below" else close > rule["level"]
+    return "true" if beyond else None
+
+
+def undecided_outcome(rule: dict) -> str:
+    """The outcome when no candle decided: touch_first touches neither level."""
+    return "void" if rule["kind"] == "touch_first" else "false"
+
+
 def evaluate(rule: dict, horizon_end: str, data: dict) -> tuple[str, dict]:
     """Return (outcome, decisive evidence) for a validated rule."""
     rule = validate_rule(rule, horizon_end)
@@ -299,25 +325,105 @@ def evaluate(rule: dict, horizon_end: str, data: dict) -> tuple[str, dict]:
     kind = rule["kind"]
     evidence = {"candles": len(candles), "window_start": rule["start"], "window_end": horizon_end,
                 "high": max(c["high"] for c in candles), "low": min(c["low"] for c in candles)}
+    for c in candles:
+        outcome = step_outcome(rule, c["high"], c["low"], c["close"])
+        if outcome is None:
+            continue
+        decisive = dict(evidence, decisive_candle=iso_ms(c["open_ms"]))
+        if outcome == "void":
+            return "void", dict(decisive, void_reason="both levels touched inside one candle: "
+                                                      "order unknowable")
+        if kind == "touch_first":
+            low_hit = c["low"] <= rule["lower"]
+            return outcome, dict(decisive, first="lower_first" if low_hit else "upper_first")
+        if kind == "close_beyond":
+            return outcome, dict(decisive, close=c["close"])
+        return outcome, decisive
     if kind == "touch_first":
-        for c in candles:
-            low_hit, high_hit = c["low"] <= rule["lower"], c["high"] >= rule["upper"]
-            if low_hit and high_hit:
-                return "void", dict(evidence, decisive_candle=iso_ms(c["open_ms"]),
-                                    void_reason="both levels touched inside one candle: order unknowable")
-            if low_hit or high_hit:
-                first = "lower_first" if low_hit else "upper_first"
-                return ("true" if first == rule["true_if"] else "false"), dict(
-                    evidence, first=first, decisive_candle=iso_ms(c["open_ms"]))
         return "void", dict(evidence, void_reason="neither level touched before horizon_end")
     if kind == "touch":
-        below = rule["side"] == "at_or_below"
-        for c in candles:
-            if (c["low"] <= rule["level"]) if below else (c["high"] >= rule["level"]):
-                return "true", dict(evidence, decisive_candle=iso_ms(c["open_ms"]))
         return "false", evidence
     below = rule["side"] == "below"
-    for c in candles:
-        if (c["close"] < rule["level"]) if below else (c["close"] > rule["level"]):
-            return "true", dict(evidence, decisive_candle=iso_ms(c["open_ms"]), close=c["close"])
     return "false", dict(evidence, extreme_close=(min if below else max)(c["close"] for c in candles))
+
+
+BOOTSTRAP_VERSION = "1.0"
+BOOTSTRAP_LOOKBACK_MS = 30 * 86_400_000
+BOOTSTRAP_MIN_DAYS = 7
+BOOTSTRAP_NEIGHBOR_MS = 30 * 60_000
+DAY_MS = 86_400_000
+
+
+def bootstrap_rival(rule: dict, horizon_end: str, data: dict,
+                    lookback_ms: int = BOOTSTRAP_LOOKBACK_MS) -> dict:
+    """What the asset's own recent candles say, replayed many times.
+
+    Idea from Jakeschincariol/day-trader-skill (trader-timemachine, MIT),
+    reimplemented: every candle of the last 30 days before the window becomes
+    four ratios to the previous close (open, high, low, close). A replay
+    starts at the last close before the window and, for each candle of the
+    window, draws a past candle from the same time of day (within 30 minutes)
+    and scales it to the current price. The same ``step_outcome`` that
+    resolves real candles decides each replay. Unlike the volatility rival,
+    it keeps the real fat tails and the time-of-day pattern. Only candles
+    that closed before the window are used, the seed comes from the rule, and
+    with fewer than 7 days of earlier candles it reports ``available: false``.
+    A replay where both touch_first levels fall in one candle is void, as in
+    the resolver, and void replays do not count."""
+    rule = validate_rule(rule, horizon_end)
+    step = INTERVAL_MS[rule["interval"]]
+    start, end = to_ms(rule["start"], "rule.start"), to_ms(horizon_end, "horizon_end")
+    closes, bars = {}, {}
+    for row in data.get("klines", []):
+        candle, close_ms = _parse_row(row)
+        t = candle["open_ms"]
+        if start - lookback_ms <= t < start and close_ms == t + step - 1:
+            if t in bars:
+                raise ResolutionError(f"duplicate candle {iso_ms(t)}")
+            bars[t] = candle
+            closes[t] = candle["close"]
+    base = {"available": False, "version": BOOTSTRAP_VERSION, "pool_candles": len(bars)}
+    if len(bars) < BOOTSTRAP_MIN_DAYS * DAY_MS // step or start - step not in closes:
+        return dict(base, reason=f"needs {BOOTSTRAP_MIN_DAYS} days of candles before the window, "
+                                 "ending right before it: fetch with --lookback-hours 720")
+    slots = max(1, DAY_MS // step)
+    pools: dict[int, list[tuple[float, float, float]]] = {}
+    for t, c in bars.items():
+        previous = closes.get(t - step)
+        if previous is None:
+            continue
+        pools.setdefault((t % DAY_MS) // step % slots, []).append(
+            (c["high"] / previous, c["low"] / previous, c["close"] / previous))
+    width = BOOTSTRAP_NEIGHBOR_MS // step if step < BOOTSTRAP_NEIGHBOR_MS else 0
+    n_window = (end - start) // step
+    window_slots = [((start + k * step) % DAY_MS) // step % slots for k in range(n_window)]
+    choices = {}
+    for slot in set(window_slots):
+        near = [r for d in range(-width, width + 1) for r in pools.get((slot + d) % slots, [])]
+        if not near:
+            return dict(base, reason=f"no earlier candles near time slot {slot}")
+        choices[slot] = near
+    replays = min(2000, max(200, 3_000_000 // max(1, n_window)))
+    seed_text = json.dumps([rule, horizon_end], sort_keys=True)
+    rng_seed = int(hashlib.sha256(seed_text.encode("utf-8")).hexdigest()[:16], 16)
+    rng = random.Random(rng_seed)
+    counts = {"true": 0, "false": 0, "void": 0}
+    spot = closes[start - step]
+    for _ in range(replays):
+        price, outcome = spot, None
+        for slot in window_slots:
+            h, lo, c = rng.choice(choices[slot])
+            outcome = step_outcome(rule, price * h, price * lo, price * c)
+            if outcome is not None:
+                break
+            price *= c
+        counts[outcome or undecided_outcome(rule)] += 1
+    decided = counts["true"] + counts["false"]
+    if not decided:
+        return dict(base, reason="every replay was void", replays=replays)
+    p = min(max(counts["true"] / decided, 0.001), 0.999)
+    return {"available": True, "version": BOOTSTRAP_VERSION, "p": round(p, 6),
+            "replays": replays, **counts, "pool_candles": len(bars),
+            "pool_days": round(len(bars) * step / DAY_MS, 2), "neighbor_slots": width,
+            "reference_close": spot, "seed": rng_seed,
+            "model": "time-of-day bootstrap of past candles (idea: trader-timemachine)"}

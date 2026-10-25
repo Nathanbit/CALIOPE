@@ -392,7 +392,7 @@ function renderQuestions() {
       <p class="muted" style="margin:6px 0 0"><code>${esc(q.question_id)}</code></p></div>`;
   }).join('') : '<span class="muted">No hay preguntas abiertas. Sella una en la pestaña Sellar.</span>';
   done.sort((a, b) => new Date(b.q.horizon_end) - new Date(a.q.horizon_end));
-  $('doneView').innerHTML = done.length ? `<table><thead><tr><th>Pregunta</th><th>Resultado</th><th>Pronósticos</th><th>Volatilidad decía</th></tr></thead><tbody>${
+  $('doneView').innerHTML = done.length ? `<table><thead><tr><th>Pregunta</th><th>Resultado</th><th>Pronósticos</th><th>Volatilidad decía</th><th>Bootstrap decía</th></tr></thead><tbody>${
     done.map(({ q, res, fs }) => {
       const y = res.outcome === 'true' ? 1 : res.outcome === 'false' ? 0 : null;
       const seen = new Set();
@@ -402,7 +402,8 @@ function renderQuestions() {
       }).join('');
       const vol = res.observed?.volatility_rival;
       return `<tr><td>${esc(q.text)}</td><td><span class="tag done">${esc(res.outcome)}</span></td><td>${pills}</td>
-        <td class="num">${vol?.available ? pct(vol.p) : '—'}</td></tr>`;
+        <td class="num">${vol?.available ? pct(vol.p) : '—'}</td>
+        <td class="num">${res.observed?.bootstrap_rival?.available ? pct(res.observed.bootstrap_rival.p) : '—'}</td></tr>`;
     }).join('')}</tbody></table>` : '<span class="muted">Aún no hay preguntas resueltas.</span>';
 }
 
@@ -410,11 +411,12 @@ function renderBoard() {
   const pairs = scoredPairs(ledgerIndex);
   const board = scoreboard(pairs);
   $('boardView').innerHTML = board.length ? `<table><thead><tr><th>Autor</th><th>n</th><th>Brier</th><th>Moneda</th>
-    <th>Aciertos de lado</th><th>Brier de la volatilidad (n)</th></tr></thead><tbody>${board.map((r) => `<tr>
+    <th>Aciertos de lado</th><th>Brier de la volatilidad (n)</th><th>Brier del bootstrap (n)</th></tr></thead><tbody>${board.map((r) => `<tr>
     <td>${esc(r.author)}${r.author === SWARM ? ' <span class="muted">(media de todos)</span>' : ''}</td>
     <td class="num">${r.n}</td><td class="num"><b>${fx(r.brier)}</b></td><td class="num">${fx(r.coin)}</td>
     <td class="num">${r.hits}/${r.n}</td>
-    <td class="num">${r.volN ? `${fx(r.volBrier)} vs tuyo ${fx(r.ownOnVol)} (${r.volN})` : '—'}</td></tr>`).join('')}</tbody></table>
+    <td class="num">${r.volN ? `${fx(r.volBrier)} vs tuyo ${fx(r.ownOnVol)} (${r.volN})` : '—'}</td>
+    <td class="num">${r.bootN ? `${fx(r.bootBrier)} vs tuyo ${fx(r.ownOnBoot)} (${r.bootN})` : '—'}</td></tr>`).join('')}</tbody></table>
     ${pairs.length < 30 ? `<p class="msg warn">Solo ${pairs.length} pronósticos puntuados: con menos de 30 el marcador todavía es ruido.</p>` : ''}`
     : '<span class="muted">Aún no hay pronósticos resueltos.</span>';
   const sel = $('calAuthor');
@@ -453,10 +455,10 @@ async function loadRival() {
     if (!r.ok) throw new Error('missing');
     const report = await r.json();
     const verdict = { beats_rival: 'le gana', worse_than_rival: 'pierde', undistinguished: 'sin diferencia clara', insufficient: 'faltan casos' };
-    view.innerHTML = `<table><thead><tr><th>Autor</th><th>n</th><th>vs historia</th><th>vs volatilidad</th></tr></thead><tbody>${
+    view.innerHTML = `<table><thead><tr><th>Autor</th><th>n</th><th>vs historia</th><th>vs volatilidad</th><th>vs bootstrap</th></tr></thead><tbody>${
       report.authors.map((a) => `<tr><td>${esc(a.author)}</td><td class="num">${a.n}</td>
         <td>${esc(verdict[a.verdict] || a.verdict)} <span class="muted">[${a.ci_family.map((v) => fx(v)).join(', ')}]</span></td>
-        <td>${a.volatility ? `${esc(verdict[a.volatility.verdict] || a.volatility.verdict)} <span class="muted">(n=${a.volatility.n})</span>` : '—'}</td></tr>`).join('')}</tbody></table>
+        ${['volatility', 'bootstrap'].map((k) => `<td>${a[k] ? `${esc(verdict[a[k].verdict] || a[k].verdict)} <span class="muted">(n=${a[k].n})</span>` : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table>
       <p class="muted">Intervalo de familia al ${pct(report.family_level)} con ${report.family_size} autores. Informe de <code>state/rival.json</code>.</p>`;
   } catch {
     view.innerHTML = `Para ver el veredicto con intervalos, genera el informe en la terminal y recarga:<pre>python prediction_ledger.py --ledger '${esc($('ledger').value.trim())}' rival | Out-File -Encoding utf8 state\\rival.json</pre>`;

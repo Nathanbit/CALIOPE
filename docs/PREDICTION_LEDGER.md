@@ -165,6 +165,19 @@ velas que cerraron antes de la ventana, sin acceso al resultado.
 - `touch_first`: `ln(U/S) / ln(U/L)`, la ruina del jugador. Es condicional a
   que se toque alguno; los `void` no se puntúan.
 
+**Rival bootstrap** (idea de la *Time Machine* de
+[day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill), MIT,
+reimplementada). `resolve-auto` también guarda `bootstrap_rival`: cada vela
+de los 30 días previos se convierte en tres razones respecto al cierre
+anterior (máximo, mínimo y cierre). Luego se repite la ventana entre 200 y
+2.000 veces: en cada vela se elige al azar una vela pasada de la misma hora del
+día (±30 minutos) y se escala al precio. Cada repetición la decide el mismo
+`step_outcome` que resuelve las velas reales. Conserva las colas gordas y el
+patrón por hora que el rival de volatilidad ignora. La semilla sale de la
+regla, así que el resultado es reproducible. Si hay menos de 7 días de velas
+previas, `available: false`. Por eso `fetch_klines.py` ahora baja 30 días
+previos por defecto (24 horas para velas de segundos).
+
 La volatilidad es por vela, así que no se anualiza y no cae en la trampa de
 los 252 días bursátiles en un mercado que cotiza todos los días. Si faltan
 velas anteriores, la resolución guarda `available: false` con el motivo y no
@@ -224,8 +237,8 @@ pregunta; NaN e infinito nunca se guardan; los argumentos JSON son en línea o
 - **Corrección por muchas comparaciones**: con `k` autores comparados a la
   vez (el enjambre cuenta), los veredictos usan el intervalo de familia al
   `1 − 0,05/k` (Bonferroni), y `ci95` se muestra solo como referencia. `k`
-  cuenta cada veredicto: autores por rivales con datos (con el de volatilidad,
-  el doble). Diez
+  cuenta cada veredicto: autores por rivales con datos (historia, volatilidad
+  y bootstrap). Diez
   pruebas al 95% dan en promedio un falso aprobado; así no.
 - **Enjambre** (`~enjambre`, idea de MiroFish): en cada pregunta con al menos
   dos autores (`--min-authors`), la media en log-odds de sus primeros

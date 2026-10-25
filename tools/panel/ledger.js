@@ -28,6 +28,9 @@ export function indexLedger(records) {
   return { questions, forecasts, resolutions };
 }
 
+// Probabilidad de un rival guardado por resolve-auto, o null si no aplica.
+const stored = (res, key) => (res.observed?.[key]?.available ? res.observed[key].p : null);
+
 // Pares (autor, p, y) que puntúan, más el enjambre.
 export function scoredPairs(index, minAuthors = 2) {
   const pairs = [];
@@ -43,7 +46,7 @@ export function scoredPairs(index, minAuthors = 2) {
       seen.add(f.author);
       if (f.status !== 'ok') continue;
       const pair = { author: f.author, p: f.probability, y, qid, cls: q.concept_class || null,
-                     vol: res.observed?.volatility_rival?.available ? res.observed.volatility_rival.p : null };
+                     vol: stored(res, 'volatility_rival'), boot: stored(res, 'bootstrap_rival') };
       pairs.push(pair);
       group.push(pair);
     }
@@ -51,7 +54,7 @@ export function scoredPairs(index, minAuthors = 2) {
       const logit = (p) => { const c = Math.min(Math.max(p, CLIP), 1 - CLIP); return Math.log(c / (1 - c)); };
       const mean = group.reduce((s, x) => s + logit(x.p), 0) / group.length;
       swarm.push({ author: SWARM, p: 1 / (1 + Math.exp(-mean)), y, qid, cls: group[0].cls,
-                   vol: group[0].vol, members: group.map((x) => x.author).sort() });
+                   vol: group[0].vol, boot: group[0].boot, members: group.map((x) => x.author).sort() });
     }
   }
   return pairs.concat(swarm);
@@ -64,9 +67,12 @@ export function scoreboard(pairs) {
   return authors.map((author) => {
     const own = pairs.filter((x) => x.author === author);
     const withVol = own.filter((x) => x.vol !== null);
+    const withBoot = own.filter((x) => x.boot !== null);
     return { author, n: own.length, brier: brier(own),
              coin: brier(own.map((x) => ({ ...x, p: 0.5 }))),
              volN: withVol.length, volBrier: brier(withVol.map((x) => ({ ...x, p: x.vol }))),
+             bootN: withBoot.length, bootBrier: brier(withBoot.map((x) => ({ ...x, p: x.boot }))),
+             ownOnBoot: brier(withBoot),
              ownOnVol: brier(withVol), hits: own.filter((x) => (x.p >= 0.5) === (x.y === 1)).length };
   }).sort((a, b) => a.brier - b.brier || b.n - a.n);
 }
