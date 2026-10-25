@@ -7,12 +7,13 @@ import { parseLedger, indexLedger, scoredPairs, scoreboard, calibration, questio
 const q = (id, extra = {}) => ({ type: 'question', question_id: id, text: id, horizon_end: '2026-10-25T05:00:00Z',
   rule: { kind: 'touch', symbol: 'BTCUSDT', interval: '15m', start: '2026-10-24T14:45:00Z', level: 79600, side: 'at_or_below' }, ...extra });
 const f = (id, author, p, seq, status = 'ok') => ({ type: 'forecast', question_id: id, author, probability: p, status, seq });
-const r = (id, outcome, vol) => ({ type: 'resolution', question_id: id, outcome,
-  observed: vol === undefined ? {} : { volatility_rival: { available: true, p: vol } } });
+const r = (id, outcome, vol, boot) => ({ type: 'resolution', question_id: id, outcome,
+  observed: { ...(vol === undefined ? {} : { volatility_rival: { available: true, p: vol } }),
+              ...(boot === undefined ? {} : { bootstrap_rival: { available: true, p: boot } }) } });
 
 const RECORDS = [q('q-a'), q('q-b'), q('q-c'), f('q-a', 'nathan', 0.2, 3), f('q-a', 'claude', 0.65, 4),
   f('q-a', 'nathan', 0.9, 5), f('q-b', 'nathan', 0.7, 6), f('q-c', 'claude', null, 7, 'failure'),
-  r('q-a', 'true', 0.7), r('q-b', 'false'), r('q-c', 'void')];
+  r('q-a', 'true', 0.7, 0.9), r('q-b', 'false'), r('q-c', 'void')];
 
 test('solo el primer pronóstico de cada autor puntúa; void y fallos no', () => {
   const pairs = scoredPairs(indexLedger(RECORDS));
@@ -36,6 +37,8 @@ test('marcador: Brier, moneda y rival de volatilidad en las mismas preguntas', (
   assert.equal(nathan.volN, 1);
   assert.ok(Math.abs(nathan.volBrier - 0.09) < 1e-12);
   assert.ok(Math.abs(nathan.ownOnVol - 0.64) < 1e-12);
+  assert.equal(nathan.bootN, 1);
+  assert.ok(Math.abs(nathan.bootBrier - 0.01) < 1e-12);
   assert.equal(board[0].author, 'claude', 'ordenado por Brier');
 });
 

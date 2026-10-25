@@ -342,12 +342,18 @@ def _rival_probabilities(records: list[dict],
 
 
 def _volatility_probabilities(records: list[dict], pairs: list[dict]) -> dict[tuple[str, str], float]:
-    """The volatility rival stored by ``resolve-auto``: computed only from
-    candles that closed before the window, so it never saw the outcome."""
+    return _stored_probabilities(records, pairs, "volatility_rival")
+
+
+def _stored_probabilities(records: list[dict], pairs: list[dict],
+                          key: str) -> dict[tuple[str, str], float]:
+    """A rival stored by ``resolve-auto`` (``volatility_rival``,
+    ``bootstrap_rival``): computed only from candles that closed before the
+    window, so it never saw the outcome."""
     _, _, resolutions = pl.index(records)
     out = {}
     for x in pairs:
-        vol = (resolutions[x["question_id"]].get("observed") or {}).get("volatility_rival") or {}
+        vol = (resolutions[x["question_id"]].get("observed") or {}).get(key) or {}
         if vol.get("available") and isinstance(vol.get("p"), (int, float)):
             out[(x["question_id"], x["author"])] = float(vol["p"])
     return out
@@ -415,9 +421,11 @@ def rival(records: list[dict], resamples: int = 2000, seed: int = 0, min_n: int 
     pairs = pairs + swarm_pairs(pairs, min_authors)
     authors = sorted({x["author"] for x in pairs})
     rivals = {"history": _rival_probabilities(records, pairs),
-              "volatility": _volatility_probabilities(records, pairs)}
+              "volatility": _stored_probabilities(records, pairs, "volatility_rival"),
+              "bootstrap": _stored_probabilities(records, pairs, "bootstrap_rival")}
     # Every verdict is one test: authors x rivals that have data.
-    family = max(1, len(authors) * (2 if rivals["volatility"] else 1))
+    family = max(1, len(authors) * sum(1 for name, p in rivals.items()
+                                       if name == "history" or p))
     alpha = 0.05 / family
     if resamples < 100 or resamples * alpha / 2 < 1:
         raise pl.GateError(f"resamples must be at least {max(100, math.ceil(2 / alpha))} "
@@ -428,13 +436,15 @@ def rival(records: list[dict], resamples: int = 2000, seed: int = 0, min_n: int 
         own = [x for x in pairs if x["author"] == author]
         history = _compare(own, rivals["history"], author, rng, resamples, alpha, min_n)
         row = dict(history, author=author)
-        row["volatility"] = _compare(own, rivals["volatility"], author, rng, resamples, alpha,
-                                     min_n)
+        for name in ("volatility", "bootstrap"):
+            row[name] = _compare(own, rivals[name], author, rng, resamples, alpha, min_n)
         board.append(row)
     return {"rivals": {"history": "class history before each forecast, shrunk to 0.5 "
                                   f"(prior {RIVAL_PRIOR})",
                        "volatility": "driftless random walk with the volatility of the 24 h "
-                                     "before the window (resolve-auto)"},
+                                     "before the window (resolve-auto)",
+                       "bootstrap": "replays of the 30 days of candles before the window, by "
+                                    "time of day (resolve-auto)"},
             "family_size": family, "family_level": round(1 - alpha, 6),
             "resamples": resamples, "seed": seed, "min_n": min_n, "authors": board,
             "evidence_type": "derivation"}

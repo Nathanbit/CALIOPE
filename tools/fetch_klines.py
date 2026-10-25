@@ -84,8 +84,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--lookback-hours", type=float, default=24.0,
-                        help="also fetch this many hours before --start, for the volatility rival")
+    parser.add_argument("--lookback-hours", type=float,
+                        help="hours before --start to fetch for the rivals (default 720 = 30 days "
+                             "for minute candles or longer, 24 for second candles)")
     args = parser.parse_args(argv)
     try:
         out = output_path(args.out)
@@ -97,8 +98,10 @@ def main(argv: list[str] | None = None) -> int:
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         if not start_ms < end_ms <= now_ms:
             raise ValueError("need --start < --end <= now: future candles cannot be observed")
-        if not 0 <= args.lookback_hours <= 168:
-            raise ValueError("--lookback-hours must be between 0 and 168")
+        if args.lookback_hours is None:
+            args.lookback_hours = 24.0 if args.interval.endswith("s") else 720.0
+        if not 0 <= args.lookback_hours <= 720:
+            raise ValueError("--lookback-hours must be between 0 and 720")
         fetch_from = start_ms - int(args.lookback_hours * 3_600_000)
         source_interval = "1s" if args.interval in resolver.AGGREGATED_FROM_1S else args.interval
         rows = []
