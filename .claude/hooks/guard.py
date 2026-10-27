@@ -39,6 +39,10 @@ PROTECTED_EDIT = [
     (re.compile(r"^projects/[^/]+/predictions/[^/]+\.jsonl$"),
      "ledger de predicciones encadenado: solo se añaden líneas con prediction_ledger.py; "
      "editarlo a mano rompe la cadena"),
+    (re.compile(r"^projects/[^/]+/desk/[^/]+\.jsonl$"),
+     "ledger de órdenes encadenado: solo se añade con python -m desk"),
+    (re.compile(r"^desk/policy\.json$"),
+     "política de la mesa (límites de riesgo y etapa demo/real): solo la persona la cambia"),
     (re.compile(r"(^|/)\.env(\.|$)(?!example$)"), "archivo de entorno con posibles secretos"),
     (re.compile(r"(^|/)(secrets|credentials)/"), "carpeta de credenciales"),
     (re.compile(r"\.(pem|key|p12|pfx)$|(^|/)id_(rsa|ed25519)|service-account.*\.json$|credentials.*\.json$"),
@@ -56,7 +60,11 @@ SECRET_READ = re.compile(
 )
 READ_CMDS = re.compile(r"\b(cat|type|less|more|head|tail|bat|sed|awk|grep|rg|xxd|strings|Get-Content|gc|cp|scp|curl"
                        r"|python3?\s+-c|py\s+-c|node\s+-e|perl\s+-e|ruby\s+-e)\b")
-LEDGER_PATH = re.compile(r"predictions/[^\s'\"]*\.jsonl\b")
+LEDGER_PATH = re.compile(r"(predictions|desk)/[^\s'\"]*\.jsonl\b")
+# The desk's human steps: approving, sending, re-enabling after a kill. Only
+# the person runs them, at a terminal. Agents may propose, never decide.
+DESK_HUMAN = re.compile(r"\bdesk\b[^;&|]*\b(approve|submit|unkill)\b")
+DESK_KEYS = re.compile(r"BLOFIN_API_(KEY|SECRET|PASSPHRASE)|CALIOPE_DESK_LIVE")
 WRITE_OPS = re.compile(r">|\btee\b|\bsed\b[^;&|]*\s-i|\bperl\b[^;&|]*\s-[a-z]*i|\btruncate\b|\brm\b|\bmv\b"
                        r"|\bcp\b|\bdd\b|\bopen\(|\bwrite|Set-Content|Add-Content|Out-File|Remove-Item")
 
@@ -116,9 +124,16 @@ def pre_bash(data: dict, root: Path) -> int:
     if git_cmd and re.search(r"core\.hookspath", cmd, re.IGNORECASE) and not re.search(
             r"\bconfig\s+core\.hookspath\s+\.githooks\b", cmd, re.IGNORECASE):
         return deny("cambiar core.hooksPath desactiva el escaneo de secretos (SECURITY.md).")
-    if LEDGER_PATH.search(cmd) and WRITE_OPS.search(cmd) and "prediction_ledger.py" not in cmd:
-        return deny("escritura directa en un ledger de predicciones: solo se añade con "
-                    "prediction_ledger.py (editarlo rompe la cadena).")
+    if DESK_HUMAN.search(cmd):
+        return deny("aprobar, enviar órdenes o reactivar la mesa es decisión de la persona, "
+                    "en su terminal. Un agente solo puede proponer (python -m desk propose).")
+    if DESK_KEYS.search(cmd):
+        return deny("las claves del exchange y el interruptor de dinero real solo los toca la "
+                    "persona en su terminal; un agente nunca los lee ni los define.")
+    if LEDGER_PATH.search(cmd) and WRITE_OPS.search(cmd) and "prediction_ledger.py" not in cmd \
+            and "-m desk" not in cmd:
+        return deny("escritura directa en un ledger encadenado: solo se añade con "
+                    "prediction_ledger.py o python -m desk (editarlo rompe la cadena).")
     if READ_CMDS.search(cmd) and SECRET_READ.search(cmd):
         return deny("comando que lee o copia un archivo de credenciales (AGENTS.md: nunca leas credenciales).")
     if re.search(r"\bgit\b[^;&|]*\bcommit\b", cmd):

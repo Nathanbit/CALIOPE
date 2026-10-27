@@ -67,6 +67,22 @@ class GuardTests(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(self.bash(cmd).returncode, 0, self.bash(cmd).stderr)
 
+    def test_desk_human_steps_and_keys_are_for_the_person(self):
+        for cmd in ("python -m desk approve --order o-1", "python -m desk submit --order o-1",
+                    "python -m desk unkill --reason ok", "py -m desk  approve --order o-1",
+                    "echo $BLOFIN_API_SECRET", "set CALIOPE_DESK_LIVE=si",
+                    "echo {} >> projects/macroflow/desk/orders.jsonl"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.bash(cmd).returncode, 2)
+        for cmd in ("python -m desk propose --author ia:kronos --question q-1 --side buy --margin 0.1 "
+                    "--leverage 2 --sl 79000", "python -m desk status", "python -m desk kill --reason x",
+                    "python -m desk verify"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.bash(cmd).returncode, 0, self.bash(cmd).stderr)
+        for path in ("desk/policy.json", "projects/macroflow/desk/orders.jsonl"):
+            with self.subTest(path=path):
+                self.assertEqual(self.edit(path).returncode, 2)
+
     def test_blocks_reading_credentials(self):
         for cmd in ("cat .env", "type secrets/broker.txt", "head -n1 deploy.pem", "cp id_rsa /tmp/x"):
             with self.subTest(cmd=cmd):

@@ -188,6 +188,37 @@ def _check_prediction_ledgers() -> list[dict]:
     return out
 
 
+def _check_desk() -> list[dict]:
+    """The desk policy stays within the hard caps; every orders ledger replays."""
+    policy_file = ROOT / "desk" / "policy.json"
+    if not policy_file.exists():
+        return []
+    try:
+        from desk import orders, policy
+        import prediction_ledger
+    except ImportError as exc:
+        return [{"check": "desk", "status": "fail", "detail": f"no importable: {exc}"[:200]}]
+    out: list[dict] = []
+    try:
+        rules, _ = policy.load(policy_file)
+        out.append({"check": "desk:policy", "status": "pass",
+                    "detail": f"etapa {rules['stage']}, margen <= {rules['max_order_fraction']:.0%}, "
+                              f"apalancamiento <= {rules['max_leverage']}x, pérdida diaria <= "
+                              f"{rules['max_daily_loss']:.0%}, auto {'sí' if rules['auto']['enabled'] else 'no'}"})
+    except policy.PolicyError as exc:
+        return [{"check": "desk:policy", "status": "fail", "detail": str(exc)[:200]}]
+    predictions_path = ROOT / rules["predictions"]
+    for ledger in sorted((ROOT / "projects").glob("*/desk/*.jsonl")):
+        rel = ledger.relative_to(ROOT).as_posix()
+        try:
+            state = orders.verify(orders.load(ledger), prediction_ledger.load(predictions_path))
+            out.append({"check": f"desk:{rel}", "status": "pass",
+                        "detail": f"cadena y compuertas íntegras ({len(state.records)} registros)"})
+        except (orders.DeskError, prediction_ledger.GateError) as exc:
+            out.append({"check": f"desk:{rel}", "status": "fail", "detail": str(exc)[:200]})
+    return out
+
+
 def doctor() -> dict:
     checks: list[dict] = []
     ok_py = sys.version_info >= (3, 11)
@@ -209,6 +240,7 @@ def doctor() -> dict:
         checks.extend(found or [{"check": f"manifest:{manifest.relative_to(ROOT).as_posix()}",
                                  "status": "pass", "detail": "todos los hashes coinciden"}])
     checks.extend(_check_prediction_ledgers())
+    checks.extend(_check_desk())
     checks.extend(_check_workflows())
     try:
         found = scan_secrets()
