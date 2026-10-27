@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "owner": "nathan",
+  "stage": "demo",
+  "instruments": ["BTC-USDT"],
+  "margin_mode": "isolated",
+  "position_mode": "net",
+  "max_order_fraction": 0.20,
+  "max_leverage": 5,
+  "max_daily_loss": 0.05,
+  "require_stop_loss": true,
+  "equity_max_age_seconds": 600,
+  "proposal_max_age_seconds": 600,
+  "approval_max_age_seconds": 120,
+  "auto": {"enabled": false, "min_n": 30, "must_beat": ["volatility", "bootstrap"]},
+  "ledger": "projects/macroflow/desk/orders.jsonl",
+  "predictions": "projects/macroflow/predictions/ledger.jsonl"
+}

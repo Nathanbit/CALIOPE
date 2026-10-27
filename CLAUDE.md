@@ -15,6 +15,7 @@
 | `caliope_doctor.py` | `doctor` y escáner de secretos (los invoca `caliope_loop.py`) |
 | `evidence_io.py` | Primitivas comunes: JSON canónico, lectura estricta, escritura atómica, bloqueo, fechas y manifiestos `sha256sum` |
 | `contracts/`, `workflows/` | Esquemas JSON y contratos de revisión por proyecto |
+| `desk/` | La mesa: agentes proponen órdenes desde pronósticos sellados; límites de `policy.json`, aprobación humana en terminal, ledger de órdenes; BloFin demo por defecto. Ver `desk/README.md` |
 | `tools/verify.py` | Comprobaciones según lo que cambió |
 | `evals/predict/`, `tools/eval_predict.py` | Casos fijos mensaje → concepto y su calificación determinista |
 | `labs/causal_btc/` | Experimento aparte: causal-ts busca qué anticipa a BTC; hipótesis congeladas y validadas en holdout. No lo importa el núcleo |

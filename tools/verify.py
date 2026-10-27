@@ -43,6 +43,7 @@ ROOT_TEST_PREFIXES = (
     "tests/",
     "evals/",
     "labs/",
+    "desk/",
     "tools/",
     "security/",
     ".githooks/",

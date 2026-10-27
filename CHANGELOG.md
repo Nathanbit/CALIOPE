@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.30.0 — 2026-10-27
+
+La mesa (`desk/`): CALIOPE pasa de solo medir a operar, como la persona en el
+medio entre los agentes y el exchange. Decisión de la persona: empezar con
+órdenes reales aprobadas una a una; automático solo para autores probados;
+límites moderados.
+
+- Ledger de órdenes encadenado (`projects/<p>/desk/orders.jsonl`): lectura
+  de capital, propuesta, decisión, envío sellado antes de salir, respuesta y
+  apagado. `verify` y `doctor` repiten todas las compuertas.
+- Compuertas: orden nacida de un pronóstico sellado del autor; stop-loss
+  obligatorio; margen ≤ 20%, apalancamiento ≤ 5x, pérdida en el stop y del
+  día ≤ 5% (apagado automático); capital leído hace < 10 min; aprobación del
+  dueño con frase escrita en su terminal; envío < 2 min tras aprobar y con el
+  cuerpo exacto aprobado. Automático solo con `auto.enabled` y un autor que
+  le ganó a volatilidad y bootstrap con 30+ resultados.
+- Topes en código que la política no puede pasar: 50% de margen, 20x, 10%
+  diario, stop-loss obligatorio.
+- Cliente BloFin con biblioteca estándar. Firma contrastada con el SDK
+  oficial y con ccxt. Demo por defecto; dinero real con dos llaves
+  (`stage: live` y `CALIOPE_DESK_LIVE=si`). Claves solo por variables de
+  entorno, nunca guardadas.
+- Guardas: un agente puede proponer, pero no aprobar, enviar, reactivar,
+  editar la política o el ledger ni tocar las claves. AGENTS.md cambia la
+  regla "no operar" por estas compuertas.
+- 12 tests de la mesa y 1 de guardas. Sin verificar: la API real de BloFin
+  (por eso se empieza en Demo).
+
 ## 0.29.0 — 2026-10-24
 
 Pronósticos de rango con cuantiles, puntuación tipo CRPS y cobertura.

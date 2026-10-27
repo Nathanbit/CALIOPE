@@ -9,13 +9,28 @@ investigación de trading.
 
 - Los modelos proponen. Las compuertas deterministas verifican. Una persona
   decide cualquier acción real.
-- Ningún cambio puede activar `automatic_publish`, `automatic_trading`,
-  `live_execution`, auto-aprobación o un broker real. `python caliope_loop.py
-  doctor` falla si un workflow los enciende.
+- **CALIOPE opera solo a través de la mesa (`desk/`), que es la persona en el
+  medio.** Una orden nace de un pronóstico sellado de su autor, lleva
+  stop-loss, cabe en los límites de `desk/policy.json` (margen, apalancamiento,
+  pérdida diaria y pérdida en el stop) y se sella antes de enviarse. La aprueba
+  el dueño de la política en su terminal; la aprobación automática solo existe
+  para autores que le ganaron a los rivales de volatilidad y bootstrap con 30 o
+  más resultados, y solo si la política la habilita. Dinero real exige dos
+  llaves: `stage: live` en la política y `CALIOPE_DESK_LIVE=si` en la terminal.
+- Un agente puede **proponer** órdenes (`python -m desk propose`), nunca
+  aprobarlas, enviarlas ni reactivar la mesa tras un apagado, ni editar la
+  política o el ledger de órdenes. Las guardas lo bloquean.
+- Fuera de la mesa, ningún cambio activa `automatic_publish`,
+  `automatic_trading`, `live_execution` ni auto-aprobación en los workflows:
+  `python caliope_loop.py doctor` falla si alguno los enciende.
 - No integres una capacidad mientras sigan abiertas preguntas de alcance,
   autoridad, efectos secundarios o verificación. Un prototipo o borrador no
   autoriza la integración.
 - Nunca leas, escribas ni registres credenciales de brokers, wallets o APIs.
+  Las claves del exchange viven solo en variables de entorno de la PC de la
+  persona (`BLOFIN_API_KEY`, `BLOFIN_API_SECRET`, `BLOFIN_API_PASSPHRASE`), con
+  permisos de lectura y operación, sin transferencias ni retiros, y atadas a
+  su IP. La mesa las lee al llamar a la API y no las guarda ni las muestra.
 
 ## Clasificación de la evidencia
 
