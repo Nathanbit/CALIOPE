@@ -18,13 +18,13 @@ auditor independiente y cada uno con su superficie de escritura.
 ## 1. Qué toca (sin escribir nada)
 
 ```bash
-python prediction_ledger.py --ledger projects/macroflow/predictions/ledger.jsonl score
+python prediction_ledger.py --ledger projects/macroflow/predictions/ledger.jsonl due
 python -m desk status
 ```
 
-Resume en 3 líneas: preguntas que **cerraron sin resolver** (con el comando
-de `fetch_klines` + `resolve-auto` de la pestaña Preguntas del panel),
-preguntas que **abren hoy** (último momento para pronosticar), y órdenes
+Resume en 3 líneas: preguntas que **cerraron sin resolver** (`due` trae los
+comandos de `fetch_klines` + `resolve-auto`, que la persona corre en su PC),
+preguntas que **abren pronto** (último momento para pronosticar), y órdenes
 **aprobadas sin enviar** o con resultado desconocido.
 
 ## 2. El pronóstico de la persona

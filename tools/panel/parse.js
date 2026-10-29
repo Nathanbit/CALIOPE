@@ -128,7 +128,16 @@ export function parseMessage(rawText, now = new Date()) {
   const out = { asset, event: 'touch', levels: prices.map((n) => n.value), probability,
                 hint: null, true_if: null, ...deadline(text, now), missing: [] };
   if (/\bcierr|\bcerrar|\bcierre\b/.test(text)) out.event = 'close_beyond';
-  if (prices.length >= 2) {
+  // A setup: "objetivo 83.000, stop 79.500" is "touch the target before the stop".
+  const labelled = (re) => prices.find((n) => re.test(text.slice(Math.max(0, n.index - 25), n.index)));
+  const target = labelled(/\b(objetivo|target|tp|take profit|meta)\s*(de|en|:|=)?\s*$/);
+  const stop = labelled(/\b(stop loss|stop|sl)\s*(de|en|:|=)?\s*$/);
+  if (target && stop && target !== stop) {
+    out.event = 'touch_first';
+    out.levels = [target.value, stop.value];
+    out.true_if = target.value < stop.value ? 'lower_first' : 'upper_first';
+    out.setup = true;
+  } else if (prices.length >= 2) {
     const between = text.slice(prices[0].end, prices[1].index);
     if (/antes (que|de que)/.test(between)) {
       out.event = 'touch_first';

@@ -22,6 +22,8 @@
      "expected": {"asset": "BTCUSDT", "event": "close_beyond", "level": 82000, "side": "above", "interval": "15m", "horizon_end": "2026-10-25T05:00:00Z", "probability": 0.5}},
     {"id": "sol-abajo", "message": "SOL toca 150 en 2 horas 20%", "reference_price": 160,
      "expected": {"asset": "SOLUSDT", "event": "touch", "level": 150, "side": "at_or_below", "interval": "1m", "horizon_end": "2026-10-23T16:00:00Z", "probability": 0.2}},
+    {"id": "setup-largo", "message": "setup largo entrada 80.500, objetivo 83.000, stop 79.500, hoy 65%", "reference_price": 80600,
+     "expected": {"asset": "BTCUSDT", "event": "touch_first", "lower": 79500, "upper": 83000, "true_if": "upper_first", "interval": "15m", "horizon_end": "2026-10-24T05:00:00Z", "probability": 0.65}},
     {"id": "hora-exacta-decimal", "message": "btc cae hasta 81.000 a las 19:30, probabilidad de 0.7", "reference_price": 81600,
      "expected": {"asset": "BTCUSDT", "event": "touch", "level": 81000, "side": "at_or_below", "interval": "15m", "horizon_end": "2026-10-24T00:30:00Z", "probability": 0.7}}
   ]

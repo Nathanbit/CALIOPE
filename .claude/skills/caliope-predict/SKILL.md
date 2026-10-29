@@ -80,3 +80,12 @@ Escribe tus respuestas como `{id: {"concept": {...}, "probability": p}}` en
 `state/answers.json` y califícalas con
 `python tools/eval_predict.py --answers state/answers.json`. Todo caso que
 falle es una forma en que interpretarías mal a la persona.
+
+## Setups (objetivo y stop)
+
+"setup largo, objetivo 83.000, stop 79.500, hoy 65%" es una pregunta
+`touch_first`: ¿toca el objetivo antes que el stop? `lower`/`upper` son los
+dos niveles y `true_if` es el lado del objetivo (`upper_first` en un largo,
+`lower_first` en un corto). Sirve igual para los setups de un indicador
+(`indicador:ultradepth`, `indicador:macroflow`) que para los de la persona;
+el rival bootstrap juega el papel de la "máquina del tiempo".

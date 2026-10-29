@@ -73,3 +73,13 @@ test('comandos seguros para PowerShell', () => {
   assert.match(cmd.dryRun, /Out-File -Encoding ascii state\\concepto\.json\npython prediction_ledger\.py .* --dry-run$/);
   assert.ok(!cmd.seal.includes('--dry-run'));
 });
+
+test('un setup con objetivo y stop es "toca el objetivo antes que el stop"', () => {
+  const long = parseMessage('setup largo entrada 80.500, objetivo 83.000, stop 79.500, hoy 65%', NOW);
+  assert.deepEqual([long.event, long.levels, long.true_if, long.probability, long.setup],
+                   ['touch_first', [83000, 79500], 'upper_first', 0.65, true]);
+  const c = buildConcept(long, 80600, SRC, NOW).concept;
+  assert.deepEqual([c.lower, c.upper, c.true_if], [79500, 83000, 'upper_first']);
+  const short = parseMessage('corto btc tp 78k sl 81.2k mañana 55%', NOW);
+  assert.deepEqual([short.levels, short.true_if], [[78000, 81200], 'lower_first']);
+});

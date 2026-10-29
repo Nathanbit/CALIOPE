@@ -739,6 +739,46 @@ def _state_command(args: argparse.Namespace) -> dict:
     return fs.thought_state(state, normalize_author(args.author), label)
 
 
+def due(records: list[dict], ledger: str, now: datetime | None = None,
+        soon_hours: float = 24.0) -> dict:
+    """What needs attention, read-only: questions that closed without a
+    resolution (with the commands to resolve them), questions whose window
+    opens within ``soon_hours`` (last chance to forecast) and windows open now."""
+    state = verify(records)
+    now = now or now_utc()
+    data_dir = Path(ledger).as_posix().rsplit("/", 1)[0] + "/data"
+    to_resolve, opening, running = [], [], []
+    for qid, q in state.questions.items():
+        if qid in state.resolutions:
+            continue
+        end = parse_time(q["horizon_end"], "horizon_end")
+        rule = q.get("rule")
+        start = parse_time(rule["start"], "rule.start") if rule else None
+        authors = sorted({f["author"] for f in state.forecasts.get(qid, [])})
+        item = {"question_id": qid, "text": q["text"], "horizon_end": q["horizon_end"],
+                "authors": authors}
+        if now >= end:
+            item["closed_hours_ago"] = round((now - end).total_seconds() / 3600, 1)
+            if rule:
+                out = (f"{data_dir}/{rule['symbol']}_{rule['interval']}_"
+                       f"{rule['start'][:10].replace('-', '')}_{qid[2:10]}.json")
+                item["commands"] = [
+                    f"python tools/fetch_klines.py --symbol {rule['symbol']} --interval "
+                    f"{rule['interval']} --start {rule['start']} --end {q['horizon_end']} --out {out}",
+                    f"python prediction_ledger.py --ledger {ledger} resolve-auto --question {qid} "
+                    f"--klines {out}"]
+            to_resolve.append(item)
+        elif start and now < start:
+            if (start - now).total_seconds() <= soon_hours * 3600:
+                item["opens_in_minutes"] = round((start - now).total_seconds() / 60)
+                opening.append(item)
+        else:
+            item["closes_in_hours"] = round((end - now).total_seconds() / 3600, 1)
+            running.append(item)
+    return {"now": iso_utc(now), "to_resolve": to_resolve, "opening_soon": opening,
+            "running": running, "evidence_type": "derivation"}
+
+
 def _verify_command(args: argparse.Namespace) -> dict:
     records = load(args.ledger)
     verify(records)
@@ -813,6 +853,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="authors a question needs before the swarm forecasts it")
     p.set_defaults(run=lambda a: _read_only(
         lambda r: fs.rival(r, a.resamples, a.seed, a.min_n, a.min_authors))(a))
+    p = sub.add_parser("due", help="what needs attention: closed without resolution, opening soon")
+    p.add_argument("--soon-hours", type=float, default=24.0)
+    p.set_defaults(run=lambda a: due(load(a.ledger), Path(a.ledger).as_posix(), soon_hours=a.soon_hours))
     p = sub.add_parser("state", help="the author's continuous thought state now")
     p.add_argument("--author", required=True)
     p.add_argument("--question", help="use this question's concept class")
