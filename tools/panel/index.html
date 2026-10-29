@@ -173,6 +173,14 @@
   </div>
 </main>
 
+<!-- Integridad del código de terceros (lección del hackeo de Polymarket vía
+     DebugBear, 2026-10-29): el navegador solo ejecuta transformers.js si su
+     SHA-384 coincide con el del paquete npm 4.3.1. Si el CDN lo cambia, la voz
+     falla en vez de correr código ajeno. Al subir de versión, recalcula el hash
+     (ver tools/panel/README.md). -->
+<script type="importmap">
+{"integrity": {"https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js": "sha384-AFNtlNOt2vbygtlRCUX2TDgkE+EyonjbCLxAfqezYwJJDVlozUhg+yKs4cPwyjHR"}}
+</script>
 <script type="module">
 import { parseMessage, buildConcept, sealCommands, numbers, normalize } from './parse.js';
 import { parseLedger, indexLedger, scoredPairs, scoreboard, calibration, questionStatus, untilText, resolveCommands, forecastLabel, SWARM } from './ledger.js';

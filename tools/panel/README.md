@@ -64,6 +64,33 @@ en log-odds. Se prueba con Node en `ledger.test.mjs`.
   lectura y no comprueba la cadena de hashes: la autoridad es `verify` y
   `rival`.
 
+## Seguridad del código de terceros
+
+El panel no guarda claves ni firma nada, pero sí ejecuta un script ajeno:
+transformers.js (la voz), desde jsdelivr. El 29 de octubre de 2026 Polymarket
+perdió fondos de usuarios porque un script de terceros (DebugBear) fue
+reemplazado por un drenador con la misma URL. Por eso:
+
+- La URL fija una versión exacta (`@4.3.1`) y el import map de `index.html`
+  exige su SHA-384. Si el archivo cambia, el navegador se niega a ejecutarlo
+  y la voz falla con un error de integridad.
+- `tests/test_panel.py` rechaza cualquier script remoto sin versión o sin hash.
+- Lo que queda sin hash: los archivos que transformers.js descarga después
+  (onnxruntime-web y los pesos del modelo de Hugging Face). Si no usas la voz,
+  no se descarga nada de terceros.
+- Las claves de la mesa nunca pasan por el navegador: viven en variables de
+  entorno y solo las lee `python -m desk`.
+
+Para subir de versión:
+
+```bash
+npm pack @huggingface/transformers@X.Y.Z
+tar xzf huggingface-transformers-X.Y.Z.tgz package/dist/transformers.min.js
+echo "sha384-$(openssl dgst -sha384 -binary package/dist/transformers.min.js | base64 -w0)"
+```
+
+y cambia la URL y el hash juntos.
+
 ## Pruebas
 
 `tests/test_panel.py` ejecuta `parse.test.mjs` con Node si está instalado
