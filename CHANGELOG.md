@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.32.0 — 2026-10-28
+
+Lo más útil de lo que faltaba de las referencias revisadas.
+
+- `due` (idea de OpenMuse): solo lectura. Lista las preguntas que cerraron
+  sin resolver, con los comandos de `fetch_klines` y `resolve-auto`, las que
+  abren pronto (último momento para pronosticar) y las que están en curso. La
+  skill `caliope-round` empieza por aquí.
+- Setups en una línea (UltraDepth, MacroFlow, la Time Machine de
+  day-trader-skill): "objetivo 83.000, stop 79.500" se interpreta como
+  `touch_first` con el objetivo como lado ganador. `parse.js` y el caso nuevo
+  de `evals/predict` (11/11).
+- Panel: autores `ia:kronos`, `indicador:ultradepth` y `mercado:polymarket`
+  en la lista.
+- 1 test de `due` y 1 de setups.
+
 ## 0.31.0 — 2026-10-28
 
 La firma: CALIOPE organizado como una mesa pequeña, con la idea de
