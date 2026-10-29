@@ -176,3 +176,21 @@ class VerifySelectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FirmTests(unittest.TestCase):
+    """The desk firm: reviewers and analysts read and run CLIs, never edit files."""
+
+    def test_no_agent_can_edit_or_write_files(self):
+        agents = sorted((ROOT / ".claude" / "agents").glob("*.md"))
+        names = {a.stem for a in agents}
+        self.assertTrue({"caliope-analyst", "caliope-risk-officer"} <= names)
+        for agent in agents:
+            head = agent.read_text(encoding="utf-8").split("---")[1]
+            tools = next(line for line in head.splitlines() if line.startswith("tools:"))
+            with self.subTest(agent=agent.stem):
+                self.assertNotRegex(tools, r"\b(Edit|Write|NotebookEdit|MultiEdit)\b")
+
+    def test_the_round_never_runs_the_human_steps(self):
+        text = (ROOT / ".claude" / "skills" / "caliope-round" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Tú no los\nejecutas", text.replace("   ", ""))

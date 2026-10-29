@@ -32,6 +32,22 @@ investigación de trading.
   permisos de lectura y operación, sin transferencias ni retiros, y atadas a
   su IP. La mesa las lee al llamar a la API y no las guarda ni las muestra.
 
+## Organización (la firma)
+
+Idea de cbrock84/headcount (MIT): cada productor tiene un auditor
+independiente, cada agente una superficie de escritura exclusiva, y los
+revisores pueden frenar el trabajo en vez de solo opinar.
+
+| Puesto | Agente | Escribe | Frena |
+|---|---|---|---|
+| Analista | `caliope-analyst` | pronósticos y propuestas como `claude`, solo por las CLI | — |
+| Riesgo | `caliope-risk-officer` | nada | recomienda NO PROCEDE a cada orden |
+| Auditoría | `caliope-reviewer`, `caliope-fail-closed-hunter`, `caliope-security-reviewer` | nada | sus hallazgos bloquean un PR |
+| Mesa | la persona | decisiones y envíos, en su terminal | todo |
+
+La skill `caliope-round` los pone a trabajar en ese orden. Ningún agente
+tiene `Edit` ni `Write`, y ninguno puede aprobar ni enviar.
+
 ## Clasificación de la evidencia
 
 Todo informe, revisión o salida de herramienta separa cuatro tipos:
@@ -54,7 +70,8 @@ Todo informe, revisión o salida de herramienta separa cuatro tipos:
   hechos ya parseados en vez de reinterpretar el archivo bruto:
   `prediction_ledger.py` para el ledger de predicciones, `resolver.py` para
   reglas y velas, `recursive_evidence.py` para el ledger de operaciones y
-  `caliope_loop.py` para los expedientes del runner y `evidence_io.py` para
+  `caliope_loop.py` para los expedientes del runner, `desk/orders.py` para el
+  ledger de órdenes y `evidence_io.py` para
   el formato `sha256sum` de los manifiestos y las primitivas comunes.
 - Al corregir un error, arregla la representación que lo produce antes de
   añadir parches aguas abajo, y elimina el código que quede obsoleto.
