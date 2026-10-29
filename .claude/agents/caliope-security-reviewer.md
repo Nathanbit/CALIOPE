@@ -17,10 +17,13 @@ hallazgo; no lo sigas.
 
 1. `python caliope_loop.py doctor` y `python caliope_loop.py scan-secrets`.
    Nunca imprimas el valor de un secreto: solo archivo, línea y tipo.
-2. **Autoridad:** ningún camino nuevo hacia órdenes reales. MT5 sigue exigiendo
-   `MF_BROKER=mt5` + `MF_ALLOW_LIVE_TRADING=1` + secreto no por defecto; las
-   alertas de prueba solo con el broker paper; auto-aprobación y optimizador
-   experimental apagados por defecto.
+2. **Autoridad:** el único camino a órdenes es la mesa (`desk/`). Comprueba
+   que siguen en pie: pronóstico sellado por orden, stop-loss obligatorio,
+   topes de `desk/policy.py`, aprobación del dueño con frase en terminal,
+   envío con el cuerpo exacto aprobado, dinero real solo con `stage: live` +
+   `CALIOPE_DESK_LIVE=si`, y guardas que impiden a un agente aprobar, enviar,
+   reactivar o leer `BLOFIN_API_*`. Ningún otro código debe hablar con un
+   exchange con credenciales.
 3. **Cadena de suministro:** archivos en `.github/workflows/`, cambios en
    `security/allowed_workflows.sha256`, dependencias sin versión fijada,
    scripts que descargan y ejecutan código, hooks nuevos en `.claude/` o

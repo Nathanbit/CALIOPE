@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.31.0 — 2026-10-28
+
+La firma: CALIOPE organizado como una mesa pequeña, con la idea de
+cbrock84/headcount (MIT) y sin servidor.
+
+- `caliope-analyst` (productor): pronostica y propone solo como `claude`,
+  solo por las CLI; nunca inventa el precio; con menos de 30 resultados
+  propone como máximo un 10% de margen.
+- `caliope-risk-officer` (revisor con autoridad para frenar): revisa cada
+  orden contra la cadena, el historial del autor (`rival`), la coherencia con
+  su pronóstico, el stop frente al ruido y la exposición acumulada.
+  Responde PROCEDE / NO PROCEDE / CON RESERVAS. No aprueba ni envía.
+- `caliope-security-reviewer` ahora revisa la mesa como único camino a
+  órdenes.
+- Skill `caliope-round` (ronda diaria): qué toca, el pronóstico de la
+  persona, los de Claude y Kronos sobre la misma pregunta y, si quiere
+  operar, propuesta → riesgo → aprobación en su terminal.
+- Prueba: ningún agente de la firma tiene `Edit` ni `Write`.
+
 ## 0.30.0 — 2026-10-27
 
 La mesa (`desk/`): CALIOPE pasa de solo medir a operar, como la persona en el

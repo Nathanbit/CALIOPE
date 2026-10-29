@@ -44,7 +44,9 @@ resto":
 - Los informes largos van a archivos (`state/`, `runs/`); en el chat, solo el
   resumen con procedencia y lo que no se verificó.
 - Delegar revisiones a los agentes de `.claude/agents/` mantiene la sesión
-  principal limpia y da una mirada que no escribió el código.
+  principal limpia y da una mirada que no escribió el código. La firma
+  (analista, riesgo, auditoría y la persona en la mesa) está en AGENTS.md;
+  la skill `caliope-round` la recorre cada día.
 
 ## Guardas automáticas (`.claude/settings.json`)
 
