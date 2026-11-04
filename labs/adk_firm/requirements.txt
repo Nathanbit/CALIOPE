@@ -1,0 +1,3 @@
+# Solo para labs/adk_firm. El núcleo de CALIOPE no las usa.
+google-adk==2.13.0
+litellm==1.108.0

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.33.0 — 2026-11-04
+
+La firma en Google ADK (`labs/adk_firm/`, laboratorio).
+
+- Ronda como `SequentialAgent`: vigía → analistas en `ParallelAgent` (una IA
+  por rama y por autor `ia:*`, sin ver a las demás) → oficial de riesgo.
+  Cualquier modelo: Gemini directo u otros por LiteLLM.
+- `sellar` corre `seal --dry-run` y solo escribe tras la confirmación de la
+  persona en ADK; `proponer` también pide confirmación y la aprobación sigue
+  en la terminal. No hay herramienta para aprobar, enviar, rechazar, apagar
+  ni reactivar la mesa, y `CALIOPE_DESK_LIVE` no llega a los subprocesos:
+  solo demo.
+- 14 tests en `tests/test_adk_firm.py` (8 sin ADK; 6 con un modelo falso, que
+  se saltan si google-adk no está instalado).
+
 ## 0.32.0 — 2026-10-28
 
 Lo más útil de lo que faltaba de las referencias revisadas.
