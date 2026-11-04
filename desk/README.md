@@ -20,6 +20,42 @@ margen 50%, apalancamiento 20x, pérdida diaria 10% y stop-loss siempre
 obligatorio. Las guardas impiden que un agente apruebe, envíe, reactive la
 mesa, edite la política o el ledger, o toque las claves.
 
+## Otro exchange con ccxt
+
+Por defecto la mesa usa su cliente nativo de BloFin. Para pasar por ccxt,
+añade a `desk/policy.json`, tú mismo:
+
+```json
+"exchange": {"id": "blofin", "client": "ccxt"}
+```
+
+**Hoy solo BloFin está habilitado.** ccxt descarta en silencio el `stopLoss` en
+los exchanges que no lo soportan dentro de la orden (en ccxt 4.5.92: Binance,
+Gate, HTX, MEXC y Kraken, entre otros), y la mesa nunca envía una orden sin su
+stop. Para habilitar otro exchange hay que añadir una prueba como
+`test_real_ccxt_blofin_sends_the_same_body_as_the_native_client`, que demuestre
+con el ccxt real que el stop viaja en la orden, y sumarlo a
+`VERIFIED_EXCHANGES`. Esa decisión es tuya.
+
+- Los instrumentos son los ids del exchange; la mesa exige un único perpetuo
+  lineal con ese id.
+- Si ccxt fuera a redondear el tamaño, el stop o el objetivo al enviarlos, la
+  mesa no envía nada y sella el rechazo: lo que sale es lo aprobado.
+- Una respuesta vacía, mal formada o sin id de orden se sella como resultado
+  **desconocido**, igual que un corte de red: búscala en el exchange antes de
+  proponer otra.
+- Claves en la terminal: `CALIOPE_<EXCHANGE>_API_KEY`, `..._API_SECRET` y
+  `..._API_PASSWORD` (BloFin sigue con sus `BLOFIN_API_*`).
+- En `demo`, la mesa activa el modo sandbox de ccxt; si ese exchange no tiene
+  demo en ccxt, se niega. El dinero real sigue pidiendo las dos llaves.
+- Las compuertas, tu `APRUEBO` en la terminal y el cuerpo sellado no cambian.
+  Para BloFin, una prueba con el ccxt real comprueba que el cuerpo que envía
+  ccxt es el mismo del cliente nativo; ccxt solo añade su `brokerId` (etiqueta
+  de referido de ccxt).
+- El capital se lee de `fetch_balance` (total en USDT). Puede no incluir la
+  ganancia o pérdida no realizada igual que `totalEquity` de BloFin: revísalo
+  en demo antes de confiar en el límite de pérdida diaria.
+
 ## Etapas
 
 1. **Demo** (por defecto): BloFin Demo Trading, dinero ficticio y API real.
@@ -59,7 +95,12 @@ mesa, edite la política o el ledger, o toque las claves.
 
 - No elige operaciones: las propone un autor a partir de su pronóstico.
 - No guarda ni muestra tus claves; las lee del entorno al llamar a la API.
-- No retira ni transfiere fondos: no existe código para eso.
+- No retira ni transfiere fondos. El cliente nativo no tiene código para eso.
+  ccxt sí trae `withdraw` y `transfer`, pero la mesa solo lo usa a través de una
+  lista cerrada de métodos (`desk/ccxt_client.py`, `ALLOWED_METHODS`), y una
+  prueba comprueba que ningún archivo de `desk/` llama a un método prohibido.
+  La primera defensa sigue siendo la clave: sin permiso de retiro ni
+  transferencia.
 
 ## Verificado y sin verificar
 

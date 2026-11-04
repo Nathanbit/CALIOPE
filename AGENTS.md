@@ -26,6 +26,11 @@ investigación de trading.
 - No integres una capacidad mientras sigan abiertas preguntas de alcance,
   autoridad, efectos secundarios o verificación. Un prototipo o borrador no
   autoriza la integración.
+- La mesa puede hablar con exchanges de ccxt solo por `desk/ccxt_client.py`,
+  que expone una lista cerrada de métodos: ninguno retira ni transfiere
+  fondos. No añadas métodos a `ALLOWED_METHODS` ni exchanges a
+  `VERIFIED_EXCHANGES` sin una decisión humana y la prueba de que el
+  stop-loss viaja en la orden.
 - Nunca leas, escribas ni registres credenciales de brokers, wallets o APIs.
   Las claves del exchange viven solo en variables de entorno de la PC de la
   persona (`BLOFIN_API_KEY`, `BLOFIN_API_SECRET`, `BLOFIN_API_PASSPHRASE`), con

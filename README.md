@@ -84,7 +84,8 @@ las pruebas que tocan según lo que cambió y declara lo que no se verificó.
 
 ## Empezar
 
-Python 3.11 o posterior, sin dependencias externas. Desde la carpeta `CALIOPE`:
+Python 3.11 o posterior. El núcleo funciona con la biblioteca estándar; DuckDB, skfolio y
+ccxt son opcionales (`pip install -r requirements.txt`). Desde la carpeta `CALIOPE`:
 
 ```powershell
 git config core.hooksPath .githooks          # una vez por clon
