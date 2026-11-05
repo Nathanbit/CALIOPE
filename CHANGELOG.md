@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.33.0 — 2026-11-04
+## 0.37.0 — 2026-11-04
 
 La firma en Google ADK (`labs/adk_firm/`, laboratorio).
 
@@ -14,6 +14,52 @@ La firma en Google ADK (`labs/adk_firm/`, laboratorio).
   solo demo.
 - 14 tests en `tests/test_adk_firm.py` (8 sin ADK; 6 con un modelo falso, que
   se saltan si google-adk no está instalado).
+## 0.36.0 — 2026-11-04
+
+El abanico de Kronos, con la receta "Kronos + day-trader-skill" puesta a
+prueba.
+
+- `labs/kronos_author/backtest.py`: repite Kronos en ventanas pasadas que no
+  se solapan y mide cuántas veces el cierre real cayó dentro de su p10-p90
+  (80% si está calibrado, con intervalo de Wilson) y, con stop y objetivo, el
+  Brier de "objetivo antes que stop". Avisa por debajo de 30 ventanas. No
+  toca el ledger.
+- `propose.py --save-paths`: guarda cada camino en `runs/kronos/` (y solo
+  ahí).
+- Corregido: una pregunta `close_value` hacía fallar `propose.py` con un
+  `KeyError`. Ahora devuelve cuantiles del cierre final y el comando
+  `forecast --quantiles`.
+- 8 tests nuevos en `tests/test_kronos_author.py`.
+## 0.35.0 — 2026-11-04
+
+Siguiente nivel: la regla "solo biblioteca estándar" se rompe a propósito,
+con tres dependencias fijadas en `requirements.txt` y opcionales. Las
+compuertas de la mesa, la aprobación en la terminal y las dos llaves del
+dinero real no cambian.
+
+- **ccxt en la mesa** (`desk/ccxt_client.py`): misma interfaz que el cliente
+  de BloFin. Lista cerrada de métodos (nada que retire o transfiera); demo
+  obliga al sandbox. Solo exchanges donde una prueba con el ccxt real
+  demuestra que el stop-loss viaja en la orden (`VERIFIED_EXCHANGES`, hoy
+  BloFin): ccxt lo descarta en silencio en otros. Si ccxt fuera a redondear
+  tamaño o precios, no se envía nada. Cualquier error que no sea un rechazo
+  del exchange (red, respuesta vacía o sin id) se sella como desconocido, y
+  los mensajes de error se sellan sin las claves. Se elige con `"exchange"`
+  en la política; sin esa clave, todo sigue igual. Para BloFin, el ccxt real
+  envía el mismo cuerpo que el cliente nativo, más su `brokerId`.
+  Revisado por `caliope-security-reviewer`; sus dos hallazgos altos están
+  corregidos con pruebas.
+- **DuckDB** (`caliope_sql.py`): SQL sobre preguntas, pronósticos,
+  resoluciones, órdenes y capital, construido desde los dueños de cada
+  formato. Antes de cualquier consulta, DuckDB pierde el acceso a archivos y
+  red y su configuración queda bloqueada. `report` trae autores, preguntas
+  abiertas y embudo de la mesa; `export` escribe un `.duckdb` en `runs/`.
+- **skfolio** (`author_weights.py`): cada autor como un activo cuyo
+  rendimiento es su habilidad contra la moneda por pregunta. Compara igual,
+  HRP y Mean-CVaR fuera de muestra (walk-forward). Se niega con menos de 30
+  preguntas compartidas. No escribe nada.
+- 31 tests nuevos (`test_ccxt_desk`, `test_caliope_sql`,
+  `test_author_weights`); los que necesitan las librerías se saltan sin ellas.
 
 ## 0.32.0 — 2026-10-28
 

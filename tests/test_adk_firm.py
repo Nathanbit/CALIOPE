@@ -14,7 +14,14 @@ sys.path.insert(0, str(LAB))
 
 import herramientas as hz  # noqa: E402
 
-HAS_ADK = importlib.util.find_spec("google.adk") is not None
+def _has(module: str) -> bool:
+    try:                                   # find_spec raises when the parent package is missing
+        return importlib.util.find_spec(module) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+HAS_ADK = _has("google.adk")
 CONCEPT = {"asset": "BTCUSDT", "event": "touch", "interval": "15m"}
 
 
