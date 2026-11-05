@@ -1,0 +1,10 @@
+# CALIOPE "siguiente nivel": dependencias opcionales del núcleo, versiones fijas.
+# Sin ellas todo lo demás sigue funcionando con la biblioteca estándar:
+#   ccxt     -> desk/ccxt_client.py, solo si desk/policy.json elige "exchange": {"client": "ccxt"}
+#   duckdb   -> caliope_sql.py (SQL de solo lectura sobre los ledgers)
+#   skfolio  -> author_weights.py (pesos entre autores)
+# Instalar en un entorno aparte:  python -m venv .venv && .venv\Scripts\activate
+#                                 pip install -r requirements.txt
+ccxt==4.5.92
+duckdb==2.0.0
+skfolio==1.12.5

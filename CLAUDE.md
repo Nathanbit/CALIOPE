@@ -16,6 +16,9 @@
 | `evidence_io.py` | Primitivas comunes: JSON canónico, lectura estricta, escritura atómica, bloqueo, fechas y manifiestos `sha256sum` |
 | `contracts/`, `workflows/` | Esquemas JSON y contratos de revisión por proyecto |
 | `desk/` | La mesa: agentes proponen órdenes desde pronósticos sellados; límites de `policy.json`, aprobación humana en terminal, ledger de órdenes; BloFin demo por defecto. Ver `desk/README.md` |
+| `caliope_sql.py` | DuckDB de solo lectura sobre los ledgers: tablas desde sus dueños, sin acceso a archivos ni red; `tables`, `query`, `report`, `export` (a `runs/`) |
+| `author_weights.py` | skfolio: cada autor como un activo (habilidad por pregunta contra la moneda); igual, HRP y Mean-CVaR fuera de muestra; exige 30 preguntas compartidas; no escribe |
+| `desk/ccxt_client.py` | La mesa por ccxt, con lista cerrada de métodos (nada que retire o transfiera); solo exchanges con el stop-loss probado (`VERIFIED_EXCHANGES`, hoy BloFin); se elige en la política |
 | `tools/verify.py` | Comprobaciones según lo que cambió |
 | `evals/predict/`, `tools/eval_predict.py` | Casos fijos mensaje → concepto y su calificación determinista |
 | `labs/causal_btc/` | Experimento aparte: causal-ts busca qué anticipa a BTC; hipótesis congeladas y validadas en holdout. No lo importa el núcleo |

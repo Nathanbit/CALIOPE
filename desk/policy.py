@@ -19,6 +19,8 @@ KEYS = {"version", "owner", "stage", "instruments", "margin_mode", "position_mod
         "max_order_fraction", "max_leverage", "max_daily_loss", "require_stop_loss",
         "equity_max_age_seconds", "proposal_max_age_seconds", "approval_max_age_seconds",
         "auto", "ledger", "predictions"}
+OPTIONAL = {"exchange"}          # absent: BloFin with the native client (desk/blofin.py)
+CLIENTS = ("native", "ccxt")
 
 
 class PolicyError(ValueError):
@@ -26,8 +28,9 @@ class PolicyError(ValueError):
 
 
 def validate(policy: dict) -> dict:
-    if not isinstance(policy, dict) or set(policy) != KEYS:
-        raise PolicyError(f"policy keys must be exactly {sorted(KEYS)}")
+    if not isinstance(policy, dict) or not KEYS <= set(policy) <= KEYS | OPTIONAL:
+        raise PolicyError(f"policy keys must be {sorted(KEYS)}, optionally {sorted(OPTIONAL)}")
+    exchange = exchange_of(policy)
     if policy["stage"] not in STAGES:
         raise PolicyError(f"stage must be one of {STAGES}")
     if policy["require_stop_loss"] is not True:
@@ -42,8 +45,10 @@ def validate(policy: dict) -> dict:
         raise PolicyError("margin_mode must be isolated or cross")
     if policy["position_mode"] not in ("net", "hedge"):
         raise PolicyError("position_mode must be net or hedge")
-    if not policy["instruments"] or not all(isinstance(i, str) and "-" in i for i in policy["instruments"]):
-        raise PolicyError("instruments must be BloFin ids like BTC-USDT")
+    if not policy["instruments"] or not all(isinstance(i, str) and i.strip() for i in policy["instruments"]):
+        raise PolicyError("instruments must be the exchange's market ids")
+    if exchange["id"] == "blofin" and not all("-" in i for i in policy["instruments"]):
+        raise PolicyError("BloFin instruments look like BTC-USDT")
     for key in ("equity_max_age_seconds", "proposal_max_age_seconds", "approval_max_age_seconds"):
         if not isinstance(policy[key], int) or not 10 <= policy[key] <= 3600:
             raise PolicyError(f"{key} must be an integer between 10 and 3600")
@@ -56,6 +61,18 @@ def validate(policy: dict) -> dict:
     if not isinstance(policy["owner"], str) or not policy["owner"].strip():
         raise PolicyError("owner is required: the person who approves orders")
     return policy
+
+
+def exchange_of(policy: dict) -> dict:
+    """Which exchange and client the desk uses. Only BloFin has a native client."""
+    exchange = policy.get("exchange", {"id": "blofin", "client": "native"})
+    if not isinstance(exchange, dict) or set(exchange) != {"id", "client"} \
+            or not isinstance(exchange["id"], str) or not exchange["id"].isalnum() \
+            or exchange["id"] != exchange["id"].lower() or exchange["client"] not in CLIENTS:
+        raise PolicyError('exchange must be {"id": "<ccxt id>", "client": "native" or "ccxt"}')
+    if exchange["client"] == "native" and exchange["id"] != "blofin":
+        raise PolicyError("only BloFin has a native client: use client ccxt for other exchanges")
+    return exchange
 
 
 def load(path: Path = POLICY) -> tuple[dict, str]:

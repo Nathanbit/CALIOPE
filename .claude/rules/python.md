@@ -9,8 +9,11 @@ Condensado de `rules/common` y `rules/python` de ECC (affaan-m/ECC, MIT); manda
 
 - Raíz (`caliope_loop.py`, `caliope_doctor.py`, `recursive_evidence.py`,
   `prediction_ledger.py`, `concepts.py`, `forecast_scoring.py`, `resolver.py`, `evidence_io.py`,
-  `desk/`, `tools/`, `.claude/hooks/`): solo biblioteca estándar, Python 3.11+. Pruebas
-  con `unittest` en `tests/`.
+  `desk/`, `tools/`, `.claude/hooks/`): biblioteca estándar por defecto, Python 3.11+.
+  Pruebas con `unittest` en `tests/`.
+- Dependencias externas: solo las fijadas en `requirements.txt` (ccxt, duckdb,
+  skfolio), importadas dentro de la función que las usa, nunca al cargar el
+  módulo. Sin ellas, lo demás funciona y sus pruebas se saltan.
 - `archive/`: sin mantenimiento. No importes nada de `archive/` desde el núcleo.
 - Anotaciones de tipo en funciones públicas. Los registros de evidencia son
   dicts validados por su dueño y sellados con JSON canónico + SHA-256; no se

@@ -29,13 +29,18 @@ ROOT = pol.ROOT
 LIVE_SWITCH = ("CALIOPE_DESK_LIVE", "si")
 
 
-def _client(policy: dict) -> blofin.Client:
-    if policy["stage"] == "live":
-        if os.environ.get(LIVE_SWITCH[0]) != LIVE_SWITCH[1]:
-            raise od.DeskError(f"stage is live but {LIVE_SWITCH[0]}={LIVE_SWITCH[1]} is not set in "
-                               "this terminal: real money needs both keys")
-        return blofin.Client(blofin.LIVE)
-    return blofin.Client(blofin.DEMO)
+def _client(policy: dict):
+    if policy["stage"] == "live" and os.environ.get(LIVE_SWITCH[0]) != LIVE_SWITCH[1]:
+        raise od.DeskError(f"stage is live but {LIVE_SWITCH[0]}={LIVE_SWITCH[1]} is not set in "
+                           "this terminal: real money needs both keys")
+    exchange = pol.exchange_of(policy)
+    if exchange["client"] == "ccxt":
+        from desk import ccxt_client  # noqa: PLC0415
+        try:
+            return ccxt_client.Client(exchange["id"], policy["stage"])
+        except ImportError as exc:
+            raise od.DeskError("the policy picks the ccxt client: pip install -r requirements.txt") from exc
+    return blofin.Client(blofin.LIVE if policy["stage"] == "live" else blofin.DEMO)
 
 
 def _paths(policy: dict) -> tuple[Path, list[dict]]:
@@ -101,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run(args: argparse.Namespace, policy: dict, ledger: Path, predictions: list[dict],
-        client: blofin.Client | None = None, ask: object = input) -> dict:
+        client: object = None, ask: object = input) -> dict:
     command = args.command
     if command in ("status", "verify"):
         state = od.verify(od.load(ledger), predictions)
@@ -125,8 +130,8 @@ def run(args: argparse.Namespace, policy: dict, ledger: Path, predictions: list[
     env = policy["stage"]
     if command == "equity":
         value = client.equity()
-        rec = od.commit(ledger, lambda s: {"type": "equity", "env": env, "equity": value,
-                                            "source": f"BloFin {env} /api/v1/account/balance totalEquity"},
+        source = getattr(client, "equity_source", "") or f"BloFin {env} /api/v1/account/balance totalEquity"
+        rec = od.commit(ledger, lambda s: {"type": "equity", "env": env, "equity": value, "source": source},
                         predictions)
         state = od.verify(od.load(ledger), predictions)
         loss = od.daily_loss(state, env, rec)
@@ -186,7 +191,7 @@ def run(args: argparse.Namespace, policy: dict, ledger: Path, predictions: list[
         answer, ok = {"error": str(exc), "code": exc.code, "response": exc.response}, False
     except OSError as exc:  # the connection broke: the order may or may not have arrived
         answer, ok = {"error": f"connection lost: {exc}", "unknown": True,
-                      "check": f"busca clientOrderId {body['clientOrderId']} en BloFin"}, False
+                      "check": f"busca clientOrderId {body['clientOrderId']} en el exchange"}, False
     od.commit(ledger, lambda s: {"type": "result", "order_id": args.order, "ok": ok,
                                  "response": answer}, predictions)
     return {"order": args.order, "sent": True, "accepted": ok, "response": answer}
