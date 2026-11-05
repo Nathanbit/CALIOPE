@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.36.0 — 2026-11-04
+
+El abanico de Kronos, con la receta "Kronos + day-trader-skill" puesta a
+prueba.
+
+- `labs/kronos_author/backtest.py`: repite Kronos en ventanas pasadas que no
+  se solapan y mide cuántas veces el cierre real cayó dentro de su p10-p90
+  (80% si está calibrado, con intervalo de Wilson) y, con stop y objetivo, el
+  Brier de "objetivo antes que stop". Avisa por debajo de 30 ventanas. No
+  toca el ledger.
+- `propose.py --save-paths`: guarda cada camino en `runs/kronos/` (y solo
+  ahí).
+- Corregido: una pregunta `close_value` hacía fallar `propose.py` con un
+  `KeyError`. Ahora devuelve cuantiles del cierre final y el comando
+  `forecast --quantiles`.
+- 8 tests nuevos en `tests/test_kronos_author.py`.
 ## 0.35.0 — 2026-11-04
 
 Siguiente nivel: la regla "solo biblioteca estándar" se rompe a propósito,
